@@ -14,29 +14,33 @@ const connectionStatus = document.getElementById('connectionStatus');
 const fileInput = document.getElementById('fileInput');
 const sendFileBtn = document.getElementById('sendFileBtn');
 const sendFileStatus = document.getElementById('sendFileStatus');
+const sendingFilesList = document.getElementById('sendingFilesList'); // <-- 새로 추가된 목록
 const receiveStatus = document.getElementById('receiveStatus');
 const receivedFilesList = document.getElementById('receivedFilesList');
-const downloadAllBtn = document.getElementById('downloadAllBtn'); // <-- 새로 추가된 버튼
+const downloadAllBtn = document.getElementById('downloadAllBtn'); 
 // ===========================================================================
 
 
 // ====== WebRTC 관련 변수 ===================================================
-let ws; // WebSocket 연결 객체
-let peerConnection; // RTCPeerConnection 객체 (P2P 연결 담당)
-let sendChannel; // 파일 송신용 RTCDataChannel
-let receiveChannel; // 파일 수신용 RTCDataChannel
+let ws; 
+let peerConnection; 
+let sendChannel; 
+let receiveChannel; 
 
 let fileQueue = []; // 전송 대기 중인 파일 큐
 let currentSendingFile = null; // 현재 전송 중인 파일 객체
-let currentFileReader = null; // 현재 전송 중인 파일을 읽는 FileReader 객체
+let currentFileReader = null; 
 
-// 수신 측에서 여러 파일을 동시에 처리하기 위한 임시 저장 공간 (파일 ID로 관리)
-// Filesystem Access API 관련 변수 (fileHandle, writableStream, pendingWrites)는 제거됨
 // {fileId: {metadata, buffers:[], currentSize:0, receiveStatusElem, downloadBtn, blobUrl, isComplete:false}}
 const incomingFiles = new Map(); 
 
-// 현재 처리 중인 수신 파일 ID.
+// 현재 청크를 처리할 파일의 ID. 메타데이터가 올 때 업데이트
 let currentReceivingFileId = null; 
+
+// 전송 측에서 전송 대기/진행 상태를 관리하기 위한 맵
+// {fileId: {file:File, statusElem:HTMLElement, statusBadge:HTMLElement}}
+const sendingFileStates = new Map();
+
 // ===========================================================================
 
 
@@ -47,10 +51,10 @@ document.addEventListener('DOMContentLoaded', () => {
     connectBtn.addEventListener('click', createPeerConnectionAndOffer);
     fileInput.addEventListener('change', handleFileSelection);          // 파일 선택 핸들러 (multiple)
     sendFileBtn.addEventListener('click', processFileQueue);             // 큐에 있는 파일 전송 시작/상태 표시 버튼
-    downloadAllBtn.addEventListener('click', downloadAllFilesAsZip);   // <-- 일괄 다운로드 버튼 이벤트
+    downloadAllBtn.addEventListener('click', downloadAllFilesAsZip);   // 일괄 다운로드 버튼 이벤트
 
     updateSendFileButtonState();
-    updateDownloadAllButtonState(); // 일괄 다운로드 버튼 상태 초기화
+    updateDownloadAllButtonState(); 
 });
 
 /**
@@ -88,7 +92,7 @@ function updateDownloadAllButtonState() {
         allFilesComplete = false;
     } else {
         for (const fileData of incomingFiles.values()) {
-            if (!fileData.isComplete || !fileData.blobUrl) { // 수신 완료 및 Blob URL 생성 필수
+            if (!fileData.isComplete || !fileData.blobUrl) { 
                 allFilesComplete = false;
                 break;
             }
@@ -105,15 +109,34 @@ function updateDownloadAllButtonState() {
 
 /**
  * 파일 선택 입력창에서 파일 선택 시 호출되는 핸들러.
- * 선택된 파일을 전송 큐에 추가합니다.
+ * 선택된 파일을 전송 큐에 추가하고, 전송 목록 UI를 업데이트합니다.
  */
 function handleFileSelection() {
     const selectedFiles = Array.from(fileInput.files);
     if (selectedFiles.length > 0) {
-        fileQueue.push(...selectedFiles); // 선택된 모든 파일을 큐에 추가
-        fileInput.value = ''; // 파일 입력 필드 초기화 (다음에 같은 파일을 선택할 수 있도록)
+        fileQueue.push(...selectedFiles); 
+        fileInput.value = ''; 
         sendFileStatus.textContent = `${selectedFiles.length}개의 파일이 큐에 추가되었습니다. 총 ${fileQueue.length}개 대기 중.`;
         
+        // 전송 목록 UI 업데이트 (새로 추가된 파일)
+        selectedFiles.forEach(file => {
+            const fileId = Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+            file._fileId = fileId; // 파일 객체에 ID 부여
+            const li = document.createElement('li');
+            li.id = `sending-file-${fileId}`;
+            li.innerHTML = `
+                <span>${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)</span>
+                <span id="send-status-${fileId}" class="status-badge pending">대기 중</span>
+            `;
+            sendingFilesList.appendChild(li);
+
+            sendingFileStates.set(fileId, {
+                file: file,
+                statusElem: li.querySelector(`#send-status-${fileId}`)
+            });
+        });
+
+
         if (!currentSendingFile && sendChannel && sendChannel.readyState === 'open') {
             processFileQueue();
         }
@@ -295,6 +318,10 @@ function closePeerConnectionAndClearQueues() {
     currentSendingFile = null; 
     currentFileReader = null; 
 
+    // 전송 목록 UI 초기화
+    sendingFilesList.innerHTML = ''; 
+    sendingFileStates.clear();
+
     closeAllFileStreamsAndClearReceiveState(); 
     receivedFilesList.innerHTML = ''; 
 
@@ -333,6 +360,12 @@ function setupSendChannel(channel) {
         sendFileStatus.textContent = `파일 전송 채널 오류: ${error.message}`;
         currentSendingFile = null; 
         currentFileReader = null;
+        // 오류 발생 시 전송 중이던 파일의 상태를 '오류'로 업데이트
+        if (currentSendingFile && sendingFileStates.has(currentSendingFile._fileId)) {
+            const state = sendingFileStates.get(currentSendingFile._fileId);
+            state.statusElem.textContent = '전송 오류';
+            state.statusElem.className = 'status-badge error';
+        }
         processFileQueue(); 
         updateSendFileButtonState();
     };
@@ -355,7 +388,13 @@ function processFileQueue() {
     if (!currentSendingFile && fileQueue.length > 0 && sendChannel && sendChannel.readyState === 'open') {
         currentSendingFile = fileQueue.shift(); 
         currentSendingFile._offset = 0; 
-        currentSendingFile._fileId = Date.now() + '-' + Math.random().toString(36).substring(2, 9); // 파일별 고유 ID 부여
+
+        // 전송 중인 파일의 UI 상태 업데이트
+        if (sendingFileStates.has(currentSendingFile._fileId)) {
+            const state = sendingFileStates.get(currentSendingFile._fileId);
+            state.statusElem.textContent = '전송 중 (0%)';
+            state.statusElem.className = 'status-badge sending';
+        }
 
         sendFileStatus.textContent = `파일 전송 시작: ${currentSendingFile.name} (${(currentSendingFile.size / (1024 * 1024)).toFixed(2)} MB)`;
         
@@ -363,6 +402,9 @@ function processFileQueue() {
 
         currentFileReader.onprogress = (e) => {
             const percent = Math.floor((currentSendingFile._offset / currentSendingFile.size) * 100);
+            if (sendingFileStates.has(currentSendingFile._fileId)) {
+                sendingFileStates.get(currentSendingFile._fileId).statusElem.textContent = `전송 중 (${percent}%)`;
+            }
             sendFileStatus.textContent = `전송 중: ${currentSendingFile.name} (${percent}%)`;
         };
 
@@ -376,6 +418,12 @@ function processFileQueue() {
         currentFileReader.onerror = (e) => {
             console.error('파일 읽기 오류:', e);
             sendFileStatus.textContent = `파일 읽기 중 오류 발생: ${currentSendingFile.name}`;
+            // 파일 읽기 오류 발생 시 파일 상태 업데이트
+            if (currentSendingFile && sendingFileStates.has(currentSendingFile._fileId)) {
+                const state = sendingFileStates.get(currentSendingFile._fileId);
+                state.statusElem.textContent = '읽기 오류';
+                state.statusElem.className = 'status-badge error';
+            }
             currentSendingFile = null; 
             currentFileReader = null;
             processFileQueue(); 
@@ -400,6 +448,11 @@ function processFileQueue() {
 function attemptToSendNextChunk(file) {
     if (!sendChannel || sendChannel.readyState !== 'open') {
         sendFileStatus.textContent = `P2P 연결이 끊겨 ${file.name} 전송을 중단합니다.`;
+        if (file && sendingFileStates.has(file._fileId)) {
+            const state = sendingFileStates.get(file._fileId);
+            state.statusElem.textContent = '연결 끊김';
+            state.statusElem.className = 'status-badge error';
+        }
         currentSendingFile = null;
         currentFileReader = null;
         processFileQueue(); 
@@ -409,7 +462,7 @@ function attemptToSendNextChunk(file) {
 
     if (file._offset === 0) {
         const metadata = {
-            fileId: file._fileId, // 고유 ID 포함
+            fileId: file._fileId, 
             filename: file.name,
             filesize: file.size,
             filetype: file.type
@@ -430,6 +483,16 @@ function attemptToSendNextChunk(file) {
         sendFileStatus.textContent = `파일 전송 완료: ${file.name}`;
         sendChannel.send('EOM:' + file._fileId); 
         
+        // 전송 완료 시 파일 상태 업데이트
+        if (file && sendingFileStates.has(file._fileId)) {
+            const state = sendingFileStates.get(file._fileId);
+            state.statusElem.textContent = '전송 완료 (100%)';
+            state.statusElem.className = 'status-badge complete';
+            // 전송 완료된 파일은 sendingFileStates에서 제거 (선택 사항, UI 유지 여부에 따라)
+            // sendingFilesList.removeChild(document.getElementById(`sending-file-${file._fileId}`));
+            // sendingFileStates.delete(file._fileId);
+        }
+
         currentSendingFile = null; 
         currentFileReader = null; 
         console.log('모든 청크 전송 완료. 다음 파일 처리 시작.');
@@ -470,9 +533,8 @@ function setupReceiveChannel(channel) {
  * @param {MessageEvent} event - DataChannel로부터 수신된 메시지 이벤트 객체
  */
 async function handleReceiveMessage(event) {
-    // 메시지가 문자열이면 메타데이터 또는 EOM 신호
     if (typeof event.data === 'string') {
-        if (event.data.startsWith('EOM:')) { 
+        if (event.data.startsWith('EOM:'')) { 
             const fileId = event.data.substring(4);
             const fileData = incomingFiles.get(fileId);
 
@@ -480,7 +542,7 @@ async function handleReceiveMessage(event) {
                 fileData.receiveStatusElem.textContent = `수신 완료`;
                 console.log(`파일 수신 완료: ${fileData.metadata.filename}`);
 
-                // Blob 생성 및 다운로드 버튼 활성화 (Filesystem API 제거됨)
+                // Filesystem Access API는 사용하지 않으므로 무조건 Blob 생성
                 const receivedBlob = new Blob(fileData.buffers, { type: fileData.metadata.filetype });
                 
                 if (receivedBlob.size === 0 && fileData.metadata.filesize > 0) {
@@ -498,7 +560,6 @@ async function handleReceiveMessage(event) {
                     fileData.saveBtn.style.backgroundColor = '#4CAF50'; 
                     fileData.saveBtn.disabled = false; 
                     console.log(`파일 ${fileData.metadata.filename} Blob URL 생성: ${url}`);
-                    // 파일 수신 및 Blob URL 생성 완료
                     fileData.isComplete = true; // 완료 플래그 설정
                 }
             } else {
@@ -507,7 +568,7 @@ async function handleReceiveMessage(event) {
             if (currentReceivingFileId === fileId) { 
                 currentReceivingFileId = null;
             }
-            updateDownloadAllButtonState(); // 모든 파일 수신 완료 상태에 따라 일괄 다운로드 버튼 업데이트
+            updateDownloadAllButtonState(); 
 
         } else { // 파일 메타데이터 수신 (JSON 문자열)
             try {
@@ -537,8 +598,8 @@ async function handleReceiveMessage(event) {
                     currentSize: 0,
                     receiveStatusElem,
                     saveBtn,
-                    blobUrl: null,
-                    isComplete: false // 수신 완료 여부 플래그
+                    blobUrl: null, // Filesystem Access API 사용 안함
+                    isComplete: false 
                 };
                 incomingFiles.set(fileId, fileData); 
                 currentReceivingFileId = fileId; 
@@ -588,11 +649,11 @@ async function handleReceiveMessage(event) {
  * 모든 수신 완료된 파일을 ZIP 파일로 묶어서 다운로드합니다.
  */
 async function downloadAllFilesAsZip() {
-    // 모든 파일이 수신 완료되고 Blob URL이 생성되었는지 확인
+    // isComplete 플래그와 blobUrl이 있는 파일만 필터링
     const readyFiles = Array.from(incomingFiles.values()).filter(f => f.isComplete && f.blobUrl);
 
     if (readyFiles.length === 0) {
-        alert('다운로드할 파일이 없습니다. 모든 파일이 수신되었는지 확인해주세요.');
+        alert('다운로드할 파일이 없습니다. 모든 파일이 수신 완료되었는지 확인해주세요.');
         return;
     }
 
@@ -603,12 +664,7 @@ async function downloadAllFilesAsZip() {
         const zipWriter = new zip.ZipWriter(new zip.BlobWriter("application/zip"));
 
         for (const fileData of readyFiles) {
-            // Blob URL에서 Blob을 가져와 ZIP에 추가
-            // URL.createObjectURL로 생성된 Blob URL은 바로 Blob 객체로 사용할 수 있음
             const fileBlob = await (await fetch(fileData.blobUrl)).blob(); 
-            // 또는 zip.js의 API를 사용하여 직접 Blob을 추가할 수 있습니다:
-            // await zipWriter.add(fileData.metadata.filename, new zip.BlobReader(fileBlob));
-
             await zipWriter.add(fileData.metadata.filename, new zip.BlobReader(fileBlob));
             console.log(`파일 ${fileData.metadata.filename}이 ZIP에 추가되었습니다.`);
         }
@@ -630,11 +686,8 @@ async function downloadAllFilesAsZip() {
         console.error('일괄 다운로드 (ZIP) 중 오류 발생:', e);
         alert('일괄 다운로드 중 오류가 발생했습니다. 자세한 내용은 콘솔을 확인해 주세요.');
     } finally {
-        downloadAllBtn.disabled = false;
-        downloadAllBtn.textContent = `일괄 다운로드 (${readyFiles.length}개)`;
-        if (readyFiles.length === 0) {
-             downloadAllBtn.textContent = '일괄 다운로드 (.zip)'; // 다운로드할 파일 없으면 초기 텍스트로
-        }
+        // 성공 여부와 관계없이 버튼 다시 활성화
+        updateDownloadAllButtonState(); 
     }
 }
 
