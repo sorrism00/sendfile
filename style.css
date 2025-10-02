@@ -23,7 +23,7 @@ body {
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
     width: 90vw; /* 뷰포트 너비의 90% 사용 */
     height: 90vh; /* 뷰포트 높이의 90% 사용 */
-    overflow-y: auto; /* 내용이 넘칠 경우 스크롤 허용 */
+    overflow-y: auto; /* 내용이 넘칠 경우 컨테이너 자체에 스크롤 허용 */
     box-sizing: border-box; 
     display: flex; 
     flex-direction: column; /* 세로 방향으로 */
@@ -32,13 +32,12 @@ body {
 
 h1 {
     color: #2c3e50;
-    margin-bottom: 20px; /* H1 아래 간격 */
+    margin-bottom: 20px; 
     font-size: 2.2em;
-    width: 100%; /* 너비 꽉 채움 */
-    text-align: center; /* 텍스트 중앙 정렬 */
+    width: 100%; 
+    text-align: center; 
 }
 
-/* 연결 섹션 버튼과 상태 메시지 정렬 */
 .connection-section {
     display: flex;
     flex-direction: column;
@@ -52,35 +51,37 @@ h1 {
     box-sizing: border-box;
 }
 .connection-section .btn.primary {
-    margin-bottom: 10px; /* 버튼 아래 상태 메시지와의 간격 */
+    margin-bottom: 10px; 
 }
 
 h2 {
     color: #34495e;
     font-size: 1.6em;
-    margin: 0; /* 기본 마진 제거 */
+    margin: 0; 
 }
 
 .file-transfer-section {
     display: flex;
-    flex-wrap: wrap; /* 작은 화면에서 줄바꿈 */
+    flex-wrap: wrap; 
     gap: 20px;
     justify-content: center; 
     width: 100%;
-    flex-grow: 1; /* 남은 공간을 차지하도록 */
+    flex-grow: 1; /* 컨테이너 내 남은 공간을 차지하도록 */
+    min-height: 0; /* flex-grow가 작동하도록 */
 }
 
 .sender-area, .receiver-area {
-    flex: 1; /* 가변 폭 */
-    min-width: 300px; /* 최소 너비 지정 */
-    max-width: 100%; /* 넘치지 않도록 */
+    flex: 1; 
+    min-width: 300px; 
+    max-width: 100%; /* 작은 화면에서 너비가 너무 줄어들지 않도록 */
     padding: 15px;
     border: 1px solid #e0e0e0;
     border-radius: 5px;
     background-color: #ffffff;
     display: flex; 
-    flex-direction: column; /* 세로 정렬 */
+    flex-direction: column; 
     box-sizing: border-box;
+    height: 100%; /* file-transfer-section 내에서 높이 꽉 채우기 */
 }
 
 /* 헤더와 버튼 정렬 */
@@ -88,7 +89,7 @@ h2 {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 15px; /* 헤더 아래 간격 */
+    margin-bottom: 15px; 
     width: 100%;
 }
 
@@ -97,14 +98,15 @@ h2 {
     display: none;
 }
 .file-select-label {
-    background-color: #007bff; /* 파란색 계열 */
+    background-color: #007bff; 
     color: white;
-    padding: 8px 15px; /* 조금 작은 패딩 */
+    padding: 8px 15px; 
     border-radius: 5px;
     cursor: pointer;
-    font-size: 0.9em; /* 폰트 크기 조정 */
+    font-size: 0.9em; 
     transition: background-color 0.3s ease;
-    margin-left: 10px; /* 헤더 텍스트와 간격 */
+    margin-left: 10px; 
+    white-space: nowrap; /* 버튼 텍스트가 줄바꿈되지 않도록 */
 }
 .file-select-label:hover {
     background-color: #0056b3;
@@ -114,27 +116,30 @@ h2 {
 .file-list {
     list-style: none;
     padding: 0;
-    margin: 0 0 15px 0; /* 상하 마진 조정, 하단 마진은 버튼과의 간격 */
+    margin: 0; /* flex 컨테이너 내부이므로 마진 제거 */
     flex-grow: 1; /* 남은 세로 공간을 채우도록 */
-    max-height: 250px; /* 리스트 최대 높이 지정 (컨테이너 높이 대비) */
-    overflow-y: auto;
+    /* max-height를 고정 값 대신 flex-grow가 계산된 값에 맞추도록 */
+    overflow-y: auto; /* 내용이 넘칠 경우 리스트 내에서 스크롤 */
     border: 1px solid #eee; 
     border-radius: 5px;
     padding: 10px;
+    min-height: 100px; /* 리스트 최소 높이 보장 */
 }
 
 /* 파일 목록 아래 버튼/상태 메시지 정렬 */
+/* 이 부분은 sender-area와 receiver-area의 flex-direction: column과 align-items: center에 의해 자동 정렬 */
 .sender-area .btn, .sender-area .status-message,
 .receiver-area .btn, .receiver-area .status-message {
-    width: auto; /* 버튼이 꽉 차는 것을 방지 */
-    align-self: center; /* 가운데 정렬 */
+    width: auto; 
+    align-self: stretch; /* 부모 너비에 맞춰 스트레칭 (버튼 일괄 너비) */
+    text-align: center; /* 텍스트는 중앙 정렬 */
     margin-top: 10px; /* 위쪽 요소와 간격 */
     margin-bottom: 5px;
 }
 .receiver-area .status-message { /* 수신 상태 메시지 */
     text-align: center;
+    margin-top: 5px; /* 버튼 위에 있는 경우 간격 */
 }
-
 
 .btn {
     background-color: #4CAF50; 
@@ -145,7 +150,7 @@ h2 {
     cursor: pointer;
     font-size: 1em;
     transition: background-color 0.3s ease;
-    /* margin: 5px; <-- sender/receiver-area 내부에서 개별적으로 조정 */
+    /* margin: 5px; <-- 위에서 sender/receiver-area 내부에서 개별적으로 조정 */
     white-space: nowrap; 
 }
 
@@ -173,7 +178,7 @@ h2 {
     cursor: not-allowed;
 }
 
-.file-input { /* 기존 file-input 스타일은 file-input-hidden으로 대체 */
+.file-input { 
     display: none;
 }
 
