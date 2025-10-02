@@ -33,7 +33,7 @@ let currentFileReader = null; // 현재 전송 중인 파일을 읽는 FileReade
 // {fileId: {metadata, buffers:[], currentSize:0, receiveStatusElem, saveBtn, fileHandle, writableStream, blobUrl}}
 const incomingFiles = new Map(); 
 
-// 현재 처리 중인 수신 파일 (handleReceiveMessage가 단일 메시지를 처리할 때 잠시 사용)
+// 현재 처리 중인 수신 파일 ID (Chunk 메시지는 파일 ID를 포함하지 않으므로, 메타데이터 수신 시 업데이트)
 let currentReceivingFileId = null; 
 // ===========================================================================
 
@@ -82,7 +82,7 @@ function handleFileSelection() {
     const selectedFiles = Array.from(fileInput.files);
     if (selectedFiles.length > 0) {
         fileQueue.push(...selectedFiles); // 선택된 모든 파일을 큐에 추가
-        fileInput.value = ''; 
+        fileInput.value = ''; // 파일 입력 필드 초기화 (다음에 같은 파일을 선택할 수 있도록)
         sendFileStatus.textContent = `${selectedFiles.length}개의 파일이 큐에 추가되었습니다. 총 ${fileQueue.length}개 대기 중.`;
         
         // DataChannel이 열려있고, 현재 전송 중인 파일이 없다면 새 파일 전송 시작
@@ -90,7 +90,7 @@ function handleFileSelection() {
             processFileQueue();
         }
     }
-    updateSendFileButtonState(); 
+    updateSendFileButtonState(); // 버튼 상태 업데이트
 }
 // ===========================================================================
 
@@ -202,9 +202,9 @@ function createPeerConnection() {
     };
 
     peerConnection.ondatachannel = event => {
-        console.log('상대방으로부터 DataChannel 수신:', event.label);
+        console.log('상대방으로부터 DataChannel 수신:', event.channel.label); // <-- event.channel.label로 수정됨
         if (receiveChannel && receiveChannel.readyState !== 'closed') {
-            receiveChannel.close(); // 기존 채널이 열려있다면 닫음 (단일 채널 관리)
+            receiveChannel.close(); 
         }
         receiveChannel = event.channel;
         setupReceiveChannel(receiveChannel);
@@ -453,45 +453,59 @@ async function handleReceiveMessage(event) {
 
                 if (fileData.writableStream) { // Filesystem Access API 사용 중이었다면
                     try {
-                        await fileData.writableStream.close();
-                        console.log(`스트림 종료: ${fileData.metadata.filename}`);
+                        await fileData.writableStream.close(); 
+                        console.log(`스트림 최종 종료 성공: ${fileData.metadata.filename}`);
                         fileData.saveBtn.textContent = '디스크 저장 완료';
+                        fileData.saveBtn.style.backgroundColor = '#28a745'; 
                         fileData.saveBtn.disabled = true;
                     } catch (e) {
-                        console.error('파일 스트림 닫기 오류:', e);
-                        fileData.receiveStatusElem.textContent = `오류 (저장 실패): ${e.message}`;
+                        console.error('파일 스트림 닫기 오류 발생 (0KB 문제 유력 원인):', e);
+                        fileData.receiveStatusElem.textContent = `오류: 디스크 저장 실패 (${e.message})`;
+                        fileData.saveBtn.textContent = '저장 실패';
+                        fileData.saveBtn.style.backgroundColor = '#dc3545'; 
+                        fileData.saveBtn.disabled = true; 
+                    } finally {
+                        incomingFiles.delete(fileId); 
                     }
                 } else { // Blob으로 저장된 경우 (Filesystem Access API 미사용/실패)
                     const receivedBlob = new Blob(fileData.buffers, { type: fileData.metadata.filetype });
-                    const url = URL.createObjectURL(receivedBlob);
-                    fileData.blobUrl = url; // 나중에 해제를 위해 URL 저장
-                    fileData.saveBtn.href = url;
-                    fileData.saveBtn.setAttribute('download', fileData.metadata.filename);
-                    fileData.saveBtn.textContent = '다운로드';
-                    fileData.saveBtn.style.backgroundColor = '#4CAF50'; // 다운로드 버튼 색상 변경
-                    fileData.saveBtn.disabled = false; // 이제 다운로드 가능
-                    console.log(`파일 ${fileData.metadata.filename} Blob URL 생성: ${url}`);
+                    
+                    if (receivedBlob.size === 0 && fileData.metadata.filesize > 0) {
+                        console.error(`Blob 생성 오류: 수신된 파일 ${fileData.metadata.filename}이 0KB 입니다.`);
+                        fileData.receiveStatusElem.textContent = `오류: 파일 0KB`;
+                        fileData.saveBtn.textContent = '다운로드 불가';
+                        fileData.saveBtn.style.backgroundColor = '#dc3545'; 
+                        fileData.saveBtn.disabled = true;
+                    } else {
+                        const url = URL.createObjectURL(receivedBlob);
+                        fileData.blobUrl = url; 
+                        fileData.saveBtn.href = url;
+                        fileData.saveBtn.setAttribute('download', fileData.metadata.filename);
+                        fileData.saveBtn.textContent = '다운로드';
+                        fileData.saveBtn.style.backgroundColor = '#4CAF50'; 
+                        fileData.saveBtn.disabled = false; 
+                        console.log(`파일 ${fileData.metadata.filename} Blob URL 생성: ${url}`);
+                    }
+                    incomingFiles.delete(fileId); 
                 }
             } else {
                 console.warn(`알 수 없는 파일 ID (${fileId})에 대한 EOM 신호 수신됨.`);
             }
-            // EOM 수신 완료 후 해당 파일의 fileData를 incomingFiles 맵에서 제거 (메모리 정리)
-            if (fileData) incomingFiles.delete(fileId);
 
         } else { // 파일 메타데이터 수신 (JSON 문자열)
             try {
                 const metadata = JSON.parse(event.data);
                 const fileId = metadata.fileId; // 전송 측에서 보낸 고유 ID 사용
 
-                // 새 파일에 대한 임시 저장소 및 UI 생성 (기존 receivedFilesList.innerHTML = ''; 제거)
+                // 새 파일에 대한 임시 저장소 및 UI 생성 (새로운 LI 요소 생성)
                 const li = document.createElement('li');
                 li.id = `received-file-${fileId}`; 
                 li.innerHTML = `
                     <span>${metadata.filename} (${(metadata.filesize / (1024 * 1024)).toFixed(2)} MB)</span>
-                    <span id="receive-status-${fileId}">수신 시작 (0%)</span>
+                    <span id="receive-status-${fileId}" class="status-badge">수신 시작 (0%)</span>
                     <a href="#" id="save-btn-${fileId}" class="btn" style="background-color:#5bc0de;" disabled>준비 중</a>
                 `;
-                receivedFilesList.appendChild(li); // 목록에 추가
+                receivedFilesList.appendChild(li); 
 
                 const receiveStatusElem = li.querySelector(`#receive-status-${fileId}`);
                 const saveBtn = li.querySelector(`#save-btn-${fileId}`);
@@ -507,18 +521,16 @@ async function handleReceiveMessage(event) {
                     blobUrl: null 
                 };
                 incomingFiles.set(fileId, fileData); // Map에 파일 ID와 함께 저장
-                currentReceivingFileId = fileId; // 현재 메타데이터를 받은 파일의 ID 저장 (청크 처리용)
+                currentReceivingFileId = fileId; // 현재 메타데이터를 받은 파일의 ID를 기록 (청크 처리용)
 
                 receiveStatusElem.textContent = `수신 시작: ${metadata.filename} (0%)`;
                 console.log('파일 메타데이터 수신:', metadata.filename);
 
-                // Filesystem Access API는 사용자의 직접적인 클릭 제스처가 있어야 가능합니다.
-                // 따라서, 바로 showSaveFilePicker를 호출하지 않고 "디스크 저장" 버튼을 활성화하고 사용자 클릭을 기다립니다.
                 if ('showSaveFilePicker' in window && 'FileSystemWritableFileStream' in window) {
                     saveBtn.textContent = '디스크 저장';
-                    saveBtn.style.backgroundColor = '#28a745'; // 색상 변경 (초록색)
+                    saveBtn.style.backgroundColor = '#28a745'; // 초록색
                     saveBtn.disabled = false; // 사용자 클릭 대기
-                    saveBtn.onclick = async (e) => { // 버튼 클릭 시 스트림 생성 시도
+                    saveBtn.onclick = async (e) => { // 버튼 클릭 시 스트림 생성 시도 (사용자 제스처)
                         e.preventDefault(); 
                         saveBtn.textContent = '저장 중...';
                         saveBtn.disabled = true;
@@ -549,17 +561,14 @@ async function handleReceiveMessage(event) {
                             fileData.fileHandle = null;
                             fileData.writableStream = null;
                             receiveStatusElem.textContent = `${metadata.filename} (메모리 버퍼링 폴백)`;
-                            saveBtn.textContent = '다운로드 준비'; // 다시 다운로드 버튼으로 변경
-                            saveBtn.style.backgroundColor = '#5bc0de';
-                            saveBtn.onclick = null; // 스트림 실패했으니 다운로드 버튼 기본 동작으로 전환
-                            // 다운로드 버튼은 EOM 받은 후에 Blob URL로 활성화됩니다.
+                            saveBtn.textContent = '다운로드 준비'; 
+                            saveBtn.style.backgroundColor = '#5bc0de'; 
+                            saveBtn.onclick = null; 
                         }
                     };
                 } else {
                     console.log('Filesystem Access API 미지원 또는 제한됨. 메모리 방식으로 수신.');
                     receiveStatusElem.textContent = `${metadata.filename} (메모리 버퍼링)`;
-                    // Blob 다운로드는 EOM 받은 후 Blob URL이 생성될 때 버튼 활성화
-                    // 이 시점에서는 "준비 중" 상태 유지
                 }
             } catch (e) {
                 console.error('수신된 메타데이터 파싱 오류:', event.data, e);
@@ -569,18 +578,18 @@ async function handleReceiveMessage(event) {
     } else { // 메시지가 ArrayBuffer면 파일 청크 데이터
         // `currentReceivingFileId`를 사용하여 현재 처리할 파일 데이터를 찾음
         if (!currentReceivingFileId || !incomingFiles.has(currentReceivingFileId)) {
-            console.warn('메타데이터 없이 청크 수신됨, 무시합니다.');
+            console.warn('현재 메타데이터가 없는 파일 청크 수신됨, 무시합니다.');
             return;
         }
+        
+        const fileData = incomingFiles.get(currentReceivingFileId); // Map에서 현재 수신 중인 파일 데이터 가져오기
 
-        const fileData = incomingFiles.get(currentReceivingFileId); // Map에서 파일 데이터 가져오기
-
-        // 파일 전송이 중단되었을 경우 (metadata.filesize보다 currentSize가 더 커지는 등) 예외 처리
-        if (fileData.currentSize + event.data.byteLength > fileData.metadata.filesize + CHUNK_SIZE * 2) { // 2청크 이상 오버헤드면 오류로 간주
+        // 데이터 크기 불일치 예방 (청크 과도 수신 방지)
+        if (fileData.currentSize + event.data.byteLength > fileData.metadata.filesize + CHUNK_SIZE * 5) { 
              console.error(`수신 데이터 크기 불일치 오류. 파일 ${fileData.metadata.filename} 전송 중단.`);
              fileData.receiveStatusElem.textContent = `오류: 데이터 크기 불일치!`;
              fileData.saveBtn.disabled = true;
-             closeSingleFileStreamAndClearReceiveState(currentReceivingFileId); // 해당 파일만 정리
+             await closeSingleFileStreamAndClearReceiveState(currentReceivingFileId); // 해당 파일만 정리
              return;
         }
 
@@ -588,7 +597,7 @@ async function handleReceiveMessage(event) {
         const percent = Math.floor((fileData.currentSize / fileData.metadata.filesize) * 100);
         fileData.receiveStatusElem.textContent = `${fileData.metadata.filename} (${percent}%)`;
 
-        if (fileData.writableStream) { // 파일 스트림이 있으면 바로 디스크에 쓰기
+        if (fileData.writableStream) { 
             try {
                 await fileData.writableStream.write(event.data);
             } catch (err) {
@@ -596,18 +605,17 @@ async function handleReceiveMessage(event) {
                 try { await fileData.writableStream.close(); } catch (closeErr) { console.error("Error closing stream after write error:", closeErr); }
                 fileData.writableStream = null;
                 fileData.fileHandle = null;
-                fileData.receiveStatusElem.textContent = '파일 쓰기 중 오류 발생. 남은 데이터를 메모리로 수신합니다.';
+                fileData.receiveStatusElem.textContent = '파일 쓰기 중 오류 발생. 메모리로 수신합니다.';
                 fileData.buffers.push(event.data); 
                 fileData.saveBtn.textContent = '다운로드 준비';
-                fileData.saveBtn.style.backgroundColor = '#5bc0de';
-                fileData.saveBtn.onclick = null; // 스트림 실패 시 디폴트 다운로드로
+                fileData.saveBtn.style.backgroundColor = '#5bc0de'; 
+                fileData.saveBtn.onclick = null; 
             }
-        } else { // 파일 스트림이 없으면 메모리에 버퍼링
+        } else { 
             fileData.buffers.push(event.data);
-            // 메모리 버퍼링 시 대용량 파일에 대한 경고 표시
-            if (fileData.currentSize > DATA_CHANNEL_BUFFER_THRESHOLD * 2 && !fileData.warnedMemory) { // 20MB 이상 버퍼링되면 경고
+            if (fileData.currentSize > DATA_CHANNEL_BUFFER_THRESHOLD * 2 && !fileData.warnedMemory) { 
                 console.warn(`파일 ${fileData.metadata.filename}이 대용량이며 메모리에 버퍼링 중입니다. 브라우저 성능에 영향을 줄 수 있습니다.`);
-                fileData.warnedMemory = true; // 한 번만 경고하도록
+                fileData.warnedMemory = true; 
             }
         }
     }
@@ -625,10 +633,10 @@ async function closeAllFileStreamsAndClearReceiveState() {
             URL.revokeObjectURL(fileData.blobUrl);
         }
         const liElem = document.getElementById(`received-file-${fileId}`);
-        if (liElem) liElem.remove(); // UI에서 해당 파일 항목 제거
+        if (liElem) liElem.remove(); 
     }
-    incomingFiles.clear(); // 맵 초기화
-    currentReceivingFileId = null; // 현재 수신 파일 ID 초기화
+    incomingFiles.clear(); 
+    currentReceivingFileId = null; 
 
     receiveStatus.textContent = '파일 수신 대기 중...';
 }
@@ -649,9 +657,8 @@ async function closeSingleFileStreamAndClearReceiveState(fileId) {
         const liElem = document.getElementById(`received-file-${fileId}`);
         if (liElem) liElem.remove();
         incomingFiles.delete(fileId);
-        if (currentReceivingFileId === fileId) {
-            currentReceivingFileId = null; // 현재 수신 중이던 파일이라면 초기화
-        }
+        // NOTE: currentReceivingFileId는 DataChannel 메시지 처리 중 업데이트되므로, 
+        // 여기서 명시적으로 초기화할 필요는 없음. (다음 청크 수신 시 다시 설정될 것)
     }
 }
 // ===========================================================================
