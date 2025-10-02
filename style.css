@@ -108,15 +108,18 @@ h2 {
 .file-select-label {
     background-color: #007bff; 
     color: white;
-    /* padding을 줄여서 버튼 사이즈를 조절 */
-    padding: 6px 10px; /* 가로 패딩 10px로 줄임 (원래 15px) */
+    padding: 8px 0; /* 세로 패딩은 유지, 가로 패딩은 0으로 줄여 너비를 직접 제어 */
     border-radius: 5px;
     cursor: pointer;
-    font-size: 0.85em; /* 폰트 크기 조금 더 줄임 */
+    font-size: 0.9em; 
     transition: background-color 0.3s ease;
     margin-left: 10px; 
     white-space: nowrap; 
-    /* width: calc(50% - 10px); // 명시적 너비 지정도 가능하지만, padding 조절이 더 자연스러움 */
+    
+    /* 명시적으로 너비 50%를 지정 */
+    width: 45%; /* 기존 버튼 너비의 약 50%가 되도록 조정 (area-header가 flex이므로) */
+    text-align: center; /* 텍스트를 버튼 중앙에 배치 */
+    box-sizing: border-box; /* 패딩이 너비 계산에 포함되도록 */
 }
 .file-select-label:hover {
     background-color: #0056b3;
