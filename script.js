@@ -409,7 +409,7 @@ function setupSendChannel(channel) {
         if (currentSendingFile) {
             attemptToSendNextChunk(currentSendingFile);
         } else if (fileQueue.length > 0) { 
-            processFileQueue(); // 큐에 파일이 있다면 다음 파일 전송 시작
+            processFileQueue(); 
         }
     };
 }
@@ -418,7 +418,6 @@ function setupSendChannel(channel) {
  * 파일 전송 큐를 처리하여 다음 파일을 전송합니다.
  */
 function processFileQueue() {
-    // localSendChannel이 open 상태이고, 큐에 파일이 있으며, 현재 전송 중인 파일이 없어야 시작
     if (!currentSendingFile && fileQueue.length > 0 && localSendChannel && localSendChannel.readyState === 'open') {
         currentSendingFile = fileQueue.shift(); 
         currentSendingFile._offset = 0; 
