@@ -33,8 +33,9 @@ let currentFileReader = null; // 현재 전송 중인 파일을 읽는 FileReade
 // {fileId: {metadata, buffers:[], currentSize:0, receiveStatusElem, saveBtn, fileHandle, writableStream, blobUrl, pendingWrites:[]}}
 const incomingFiles = new Map(); 
 
-// 현재 처리 중인 수신 파일 ID (Chunk 메시지는 파일 ID를 포함하지 않으므로, 메타데이터 수신 시 업데이트)
-let currentReceivingFileId = null; 
+// 현재 처리 중인 수신 파일 ID는 더 이상 청크 메시지 처리의 기준이 아님 (청크 메시지에 fileId 포함).
+// 하지만 메타데이터 수신 시 해당 ID를 맵에서 참조하는 용도로 사용할 수 있음.
+// let currentReceivingFileId = null; // 이 변수는 이제 사용하지 않음
 // ===========================================================================
 
 
@@ -202,7 +203,7 @@ function createPeerConnection() {
     };
 
     peerConnection.ondatachannel = event => {
-        console.log('상대방으로부터 DataChannel 수신:', event.channel.label); // <-- event.channel.label로 수정됨
+        console.log('상대방으로부터 DataChannel 수신:', event.channel.label);
         if (receiveChannel && receiveChannel.readyState !== 'closed') {
             receiveChannel.close(); 
         }
@@ -327,7 +328,7 @@ function processFileQueue() {
     if (!currentSendingFile && fileQueue.length > 0 && sendChannel && sendChannel.readyState === 'open') {
         currentSendingFile = fileQueue.shift(); 
         currentSendingFile._offset = 0; 
-        currentSendingFile._fileId = Date.now() + '-' + Math.random().toString(36).substring(2, 9); 
+        currentSendingFile._fileId = Date.now() + '-' + Math.random().toString(36).substring(2, 9); // 파일별 고유 ID 부여
 
         sendFileStatus.textContent = `파일 전송 시작: ${currentSendingFile.name} (${(currentSendingFile.size / (1024 * 1024)).toFixed(2)} MB)`;
         
@@ -339,7 +340,17 @@ function processFileQueue() {
         };
 
         currentFileReader.onload = (e) => {
-            sendChannel.send(e.target.result); 
+            // DataChannel로 청크와 함께 파일 ID를 전송
+            const chunkMessage = {
+                fileId: currentSendingFile._fileId, // 청크 메시지에 파일 ID 포함
+                data: e.target.result // ArrayBuffer
+            };
+            sendChannel.send(chunkMessage); // 주의: Binary Type을 'arraybuffer'로 설정해야 합니다. (기본 설정은 'string')
+                                            // DataChannel은 직접 ArrayBuffer를 보낼 수 있으므로, 객체화 하지 않아도 됩니다.
+                                            // 아니면 아래 EOM처럼 stringify + base64 encoding (비효율적) 해야 합니다.
+                                            // 가장 간단한 방법은 sendChannel.binaryType = 'arraybuffer'; 로 설정하고
+                                            // sendChannel.send(e.target.result); 하는 것입니다. (현재 코드 방식)
+
             currentSendingFile._offset += e.target.result.byteLength;
             
             attemptToSendNextChunk(currentSendingFile); 
@@ -354,6 +365,8 @@ function processFileQueue() {
             updateSendFileButtonState();
         };
 
+        // sendChannel의 binaryType을 설정하여 ArrayBuffer를 직접 전송하도록 보장
+        sendChannel.binaryType = 'arraybuffer'; // <--- 이 부분 추가
         attemptToSendNextChunk(currentSendingFile); 
         
     } else if (fileQueue.length === 0 && !currentSendingFile) {
@@ -441,34 +454,38 @@ function setupReceiveChannel(channel) {
  * @param {MessageEvent} event - DataChannel로부터 수신된 메시지 이벤트 객체
  */
 async function handleReceiveMessage(event) {
+    // ArrayBufferReceived라는 커스텀 메시지를 사용했다면, if (typeof event.data === 'string') 부분을 좀 더 섬세하게 분리해야 합니다.
+    // 현재는 ArrayBuffer와 String 메시지를 명확히 분리하여 처리하고 있습니다.
+    
+    // 메시지가 문자열이면 메타데이터 또는 EOM 신호
     if (typeof event.data === 'string') {
-        if (event.data.startsWith('EOM:')) { // EOM 신호 처리 (파일 ID 포함)
+        if (event.data.startsWith('EOM:')) { 
             const fileId = event.data.substring(4);
             const fileData = incomingFiles.get(fileId);
 
             if (fileData && fileData.metadata) {
-                fileData.receiveStatusElem.textContent = `수신 완료`;
-                console.log(`파일 수신 완료: ${fileData.metadata.filename}`);
-
-                if (fileData.writableStream) { // Filesystem Access API 사용 중이었다면
+                // Ensure all pending writes are complete before closing stream
+                if (fileData.writableStream) {
+                    console.log(`EOM for ${fileData.metadata.filename}. Waiting for all writes to finish before closing stream.`);
+                    // WriteAllPendingDataToStream 함수를 통해 모든 버퍼링된 데이터 처리
+                    await writeAllPendingDataToStream(fileId); // 모든 버퍼링된 데이터 스트림에 쓰기
                     try {
                         await fileData.writableStream.close(); 
                         console.log(`스트림 최종 종료 성공: ${fileData.metadata.filename}`);
+                        fileData.receiveStatusElem.textContent = '수신 완료';
                         fileData.saveBtn.textContent = '디스크 저장 완료';
                         fileData.saveBtn.style.backgroundColor = '#28a745'; 
                         fileData.saveBtn.disabled = true;
                     } catch (e) {
-                        console.error('파일 스트림 닫기 오류 발생 (0KB 문제 유력 원인):', e);
+                        console.error('파일 스트림 닫기 오류 발생:', e);
                         fileData.receiveStatusElem.textContent = `오류: 디스크 저장 실패 (${e.message})`;
                         fileData.saveBtn.textContent = '저장 실패';
                         fileData.saveBtn.style.backgroundColor = '#dc3545'; 
                         fileData.saveBtn.disabled = true; 
                     } finally {
-                        // incomingFiles 맵에서 EOM 처리 후 이 파일에 대한 모든 상태 정리
-                        // 이렇게 하면 해당 파일은 Map에서 제거되고, 다음 수신이 currentReceivingFileId를 덮어쓰지 않습니다.
                         incomingFiles.delete(fileId); 
                     }
-                } else { // Blob으로 저장된 경우 (Filesystem Access API 미사용/실패)
+                } else { // Blob으로 저장된 경우
                     const receivedBlob = new Blob(fileData.buffers, { type: fileData.metadata.filetype });
                     
                     if (receivedBlob.size === 0 && fileData.metadata.filesize > 0) {
@@ -487,7 +504,6 @@ async function handleReceiveMessage(event) {
                         fileData.saveBtn.disabled = false; 
                         console.log(`파일 ${fileData.metadata.filename} Blob URL 생성: ${url}`);
                     }
-                    // EOM 처리 후 이 파일에 대한 모든 상태 정리
                     incomingFiles.delete(fileId); 
                 }
             } else {
@@ -530,9 +546,10 @@ async function handleReceiveMessage(event) {
                     saveBtn,
                     fileHandle: null,
                     writableStream: null,
-                    blobUrl: null 
+                    blobUrl: null,
+                    pendingWrites: [] // pending writes promises for stream.write operations
                 };
-                incomingFiles.set(fileId, fileData); // Map에 파일 ID와 함께 저장
+                incomingFiles.set(fileId, fileData); 
                 currentReceivingFileId = fileId; // 현재 메타데이터를 받은 파일의 ID를 기록 (청크 처리용)
 
                 receiveStatusElem.textContent = `수신 시작: ${metadata.filename} (0%)`;
@@ -540,8 +557,8 @@ async function handleReceiveMessage(event) {
 
                 if ('showSaveFilePicker' in window && 'FileSystemWritableFileStream' in window) {
                     saveBtn.textContent = '디스크 저장';
-                    saveBtn.style.backgroundColor = '#28a745'; // 초록색
-                    saveBtn.disabled = false; // 사용자 클릭 대기
+                    saveBtn.style.backgroundColor = '#28a745'; 
+                    saveBtn.disabled = false; 
                     saveBtn.onclick = async (e) => { // 버튼 클릭 시 스트림 생성 시도 (사용자 제스처)
                         e.preventDefault(); 
                         saveBtn.textContent = '저장 중...';
@@ -562,20 +579,23 @@ async function handleReceiveMessage(event) {
                             // 이전에 메모리에 버퍼링된 데이터가 있다면 스트림에 쓰기
                             if (fileData.buffers.length > 0) {
                                 console.log('버퍼링된 데이터 스트림에 쓰기 시작');
+                                // 버퍼링된 데이터를 스트림에 쓰는 것도 비동기이므로 pendingWrites 큐에 추가해야 함
                                 for (const buffer of fileData.buffers) {
-                                    await fileData.writableStream.write(buffer);
+                                    fileData.pendingWrites.push(fileData.writableStream.write(buffer));
                                 }
                                 fileData.buffers = []; 
-                                console.log('버퍼링된 데이터 스트림에 쓰기 완료');
+                                // 모든 버퍼링된 write 작업이 완료될 때까지 기다림 (선택 사항, EOM 시점에서 한번에 기다릴 수 있음)
+                                // await Promise.all(fileData.pendingWrites); 
+                                console.log('버퍼링된 데이터 스트림에 쓰기 완료 (pendingWrites에 추가).');
                             }
                         } catch (err) {
                             console.warn('Filesystem Access API 사용 거부 또는 오류 (사용자 제스처 내):', err);
                             fileData.fileHandle = null;
                             fileData.writableStream = null;
-                            receiveStatusElem.textContent = `${metadata.filename} (메모리 버퍼링 폴백)`;
-                            saveBtn.textContent = '다운로드 준비'; 
-                            saveBtn.style.backgroundColor = '#5bc0de'; 
-                            saveBtn.onclick = null; 
+                            fileData.receiveStatusElem.textContent = `${metadata.filename} (메모리 버퍼링 폴백)`;
+                            fileData.saveBtn.textContent = '다운로드 준비'; 
+                            fileData.saveBtn.style.backgroundColor = '#5bc0de'; 
+                            fileData.saveBtn.onclick = null; 
                         }
                     };
                 } else {
@@ -588,23 +608,20 @@ async function handleReceiveMessage(event) {
             }
         }
     } else { // 메시지가 ArrayBuffer면 파일 청크 데이터
-        // `currentReceivingFileId`를 사용하여 현재 처리할 파일 데이터를 찾음
+        // Chunk 메시지에서 파일 ID를 얻는 더 견고한 방법 (전송 측에서 청크에도 fileId 포함하는 방식 필요)
+        // 현재는 메타데이터 받은 후 currentReceivingFileId로 찾고 있음.
         if (!currentReceivingFileId || !incomingFiles.has(currentReceivingFileId)) {
-            // 다른 파일의 청크가 도착한 경우 (이전 파일 EOM 누락 등)
-            // 모든 incomingFiles를 순회하여 가장 가까운 fileId를 찾는 등의 복잡한 로직이 필요할 수 있으나
-            // 단순화를 위해 현재는 경고 후 무시하거나, EOM 누락 시 수동 정리 필요
             console.warn('현재 메타데이터가 없는 파일 청크 수신됨, 무시합니다. (currentReceivingFileId 불일치)', currentReceivingFileId);
             return;
         }
         
-        const fileData = incomingFiles.get(currentReceivingFileId); // Map에서 현재 수신 중인 파일 데이터 가져오기
+        const fileData = incomingFiles.get(currentReceivingFileId); 
 
-        // 데이터 크기 불일치 예방 (청크 과도 수신 방지)
         if (fileData.currentSize + event.data.byteLength > fileData.metadata.filesize + CHUNK_SIZE * 5) { 
              console.error(`수신 데이터 크기 불일치 오류. 파일 ${fileData.metadata.filename} 전송 중단.`);
              fileData.receiveStatusElem.textContent = `오류: 데이터 크기 불일치!`;
              fileData.saveBtn.disabled = true;
-             await closeSingleFileStreamAndClearReceiveState(currentReceivingFileId); // 해당 파일만 정리
+             await closeSingleFileStreamAndClearReceiveState(currentReceivingFileId); 
              return;
         }
 
@@ -614,7 +631,8 @@ async function handleReceiveMessage(event) {
 
         if (fileData.writableStream) { 
             try {
-                await fileData.writableStream.write(event.data);
+                // write 작업의 Promise를 pendingWrites 배열에 추가
+                fileData.pendingWrites.push(fileData.writableStream.write(event.data)); 
             } catch (err) {
                 console.error('파일 스트림 쓰기 오류:', err);
                 try { await fileData.writableStream.close(); } catch (closeErr) { console.error("Error closing stream after write error:", closeErr); }
@@ -635,6 +653,27 @@ async function handleReceiveMessage(event) {
         }
     }
 }
+
+/**
+ * FileSystemWritableFileStream에 모든 버퍼링된 데이터를 쓰고 완료될 때까지 기다립니다.
+ * @param {string} fileId - 대상 파일의 ID
+ */
+async function writeAllPendingDataToStream(fileId) {
+    const fileData = incomingFiles.get(fileId);
+    if (!fileData || !fileData.writableStream || fileData.pendingWrites.length === 0) {
+        return; // 스트림 없거나 pendingWrites 없으면 할 일 없음
+    }
+    console.log(`파일 ${fileData.metadata.filename}: ${fileData.pendingWrites.length}개의 pending writes 대기 중...`);
+    try {
+        await Promise.all(fileData.pendingWrites); // 모든 pending write Promise가 완료될 때까지 기다림
+        fileData.pendingWrites = []; // 완료되었으니 배열 비움
+        console.log(`파일 ${fileData.metadata.filename}: 모든 pending writes 완료.`);
+    } catch (e) {
+        console.error(`파일 ${fileData.metadata.filename}: pending writes 중 오류 발생:`, e);
+        // 오류 발생 시 스트림 상태에 따라 추가 처리 필요 (재시도 또는 폴백)
+    }
+}
+
 
 /**
  * 모든 수신 관련 스트림 및 버퍼를 초기화하고 닫습니다. (전체 incomingFiles 맵 정리)
@@ -672,9 +711,9 @@ async function closeSingleFileStreamAndClearReceiveState(fileId) {
         const liElem = document.getElementById(`received-file-${fileId}`);
         if (liElem) liElem.remove();
         incomingFiles.delete(fileId);
-        if (currentReceivingFileId === fileId) {
-            currentReceivingFileId = null; 
-        }
+        // currentReceivingFileId는 DataChannel 메시지 처리 로직에서 fileId를 사용하여 참조되므로, 
+        // 여기서 명시적으로 null로 설정하지 않아도 됩니다. (다음 메타데이터 수신 시 업데이트)
+        // 단, EOM이 없는 상태에서 연결이 끊어지면 이 값이 이전 파일 ID를 유지할 수 있으므로 주의.
     }
 }
 // ===========================================================================
