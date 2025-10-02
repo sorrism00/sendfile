@@ -59,6 +59,11 @@ function updateSendFileButtonState() {
     // (즉, 연결 시도 중이거나 연결된 상태)
     const isPeerConnectionActive = peerConnection && peerConnection.connectionState !== 'closed';
     connectBtn.disabled = isPeerConnectionActive;
+
+    // 만약 WebSocket이 끊어졌다면 connectBtn은 다시 활성화될 수 있습니다.
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+        connectBtn.disabled = false;
+    }
 }
 // ===========================================================================
 
@@ -68,11 +73,17 @@ function updateSendFileButtonState() {
  * Railway 시그널링 서버에 WebSocket 연결을 수립합니다.
  */
 function connectWebSocket() {
+    if (ws && ws.readyState !== WebSocket.CLOSED) {
+        console.warn('WebSocket이 이미 연결되어 있거나 연결 중입니다. 새로 연결을 시도하지 않습니다.');
+        return; // 이미 연결되어 있다면 다시 연결 시도 안함
+    }
+
     ws = new WebSocket(RAILWAY_SIGNALING_SERVER_URL);
 
     ws.onopen = () => {
         console.log('Railway 시그널링 서버에 연결되었습니다.');
         connectionStatus.textContent = '연결 상태: 시그널링 서버 연결됨 (P2P 연결 대기 중)';
+        updateSendFileButtonState();
     };
 
     ws.onmessage = async event => {
@@ -89,7 +100,8 @@ function connectWebSocket() {
         }
 
         // peerConnection이 아직 생성되지 않았다면, 메시지를 받기 전에 생성
-        if (!peerConnection) {
+        // offer나 answer를 받기 전에 candidate가 올 수도 있으므로, 이 부분에서 먼저 PeerConnection 생성
+        if (!peerConnection || peerConnection.connectionState === 'closed') { // P2P 연결이 없거나 닫혔다면 새로 생성
             createPeerConnection();
         }
 
@@ -104,25 +116,37 @@ function connectWebSocket() {
         } else if (message.type === 'candidate') {
             try {
                 // 받은 ICE Candidate를 PeerConnection에 추가
-                await peerConnection.addIceCandidate(new RTCIceCandidate(message));
+                // message.candidate 자체가 RTCIceCandidateInit 딕셔너리여야 합니다.
+                await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate)); // <-- message.candidate 사용
             } catch (e) {
-                console.error('ICE candidate 추가 실패:', e);
+                console.error('ICE candidate 추가 실패:', e, message.candidate);
             }
         }
-        // 이 시점에서 UI 업데이트는 peerConnection.onconnectionstatechange에서 처리
     };
 
     ws.onclose = () => {
         console.log('시그널링 서버 연결이 끊어졌습니다.');
         connectionStatus.textContent = '연결 상태: 시그널링 서버 연결 끊김';
-        updateSendFileButtonState(); // 연결 끊김에 따라 버튼 상태 업데이트
+        
+        // P2P 연결도 닫아야 함 (연결 끊김에 따른 리소스 정리)
+        if (peerConnection && peerConnection.connectionState !== 'closed') {
+            peerConnection.close();
+        }
+        peerConnection = null; // PeerConnection 객체 초기화
+        updateSendFileButtonState();
         // TODO: 필요하다면 재연결 로직 추가
     };
 
     ws.onerror = error => {
         console.error('WebSocket 오류 발생:', error);
         connectionStatus.textContent = '연결 상태: 시그널링 서버 오류 발생';
-        updateSendFileButtonState(); // 오류 발생에 따라 버튼 상태 업데이트
+        
+        // P2P 연결도 닫아야 함
+        if (peerConnection && peerConnection.connectionState !== 'closed') {
+            peerConnection.close();
+        }
+        peerConnection = null; // PeerConnection 객체 초기화
+        updateSendFileButtonState();
     };
 }
 // ===========================================================================
@@ -133,6 +157,11 @@ function connectWebSocket() {
  * RTCPeerConnection 객체를 생성하고 이벤트 핸들러를 설정합니다.
  */
 function createPeerConnection() {
+    // 이전 peerConnection이 닫히지 않았다면 닫고 새로 만듭니다.
+    if (peerConnection && peerConnection.connectionState !== 'closed') {
+        peerConnection.close();
+    }
+
     const configuration = {
         iceServers: [{ urls: STUN_SERVER_URL }] // STUN 서버 설정
     };
@@ -142,7 +171,11 @@ function createPeerConnection() {
     peerConnection.onicecandidate = event => {
         if (event.candidate) {
             console.log('ICE candidate 전송:', event.candidate.candidate);
-            ws.send(JSON.stringify(event.candidate));
+            // 명시적으로 type 필드를 포함한 객체로 감싸서 전송합니다.
+            ws.send(JSON.stringify({
+                type: 'candidate', // <-- 여기에 'type' 필드 추가!
+                candidate: event.candidate // RTCIceCandidate 객체 자체를 candidate 속성에 넣습니다.
+            }));
         }
     };
 
@@ -168,9 +201,23 @@ function createPeerConnection() {
 async function createPeerConnectionAndOffer() {
     // 이미 PeerConnection이 활성 상태이면 중복 실행 방지
     if (peerConnection && peerConnection.connectionState !== 'closed') {
-        console.log('이미 PeerConnection이 존재하거나 연결 시도 중입니다.');
+        console.log('이미 PeerConnection이 존재하거나 연결 시도 중입니다. 재연결을 시도하지 않습니다.');
         return;
     }
+
+    // WebSocket이 연결되지 않았다면 먼저 연결 시도
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+        console.warn('WebSocket이 연결되어 있지 않습니다. 먼저 시그널링 서버에 연결합니다.');
+        connectWebSocket(); // WebSocket 재연결 시도
+        // WebSocket이 연결될 때까지 대기하는 로직을 추가하는 것이 더 견고할 수 있습니다.
+        // 현재는 connectWebSocket 후 바로 진행되므로, 네트워크 상황에 따라 onopen이 먼저 발생하지 않을 수 있음.
+    }
+    if (ws.readyState !== WebSocket.OPEN) {
+        console.log('WebSocket 연결 대기 중... 잠시 후 다시 시도합니다.');
+        setTimeout(createPeerConnectionAndOffer, 1000); // 1초 후 다시 시도
+        return;
+    }
+
 
     // 1. PeerConnection 생성
     createPeerConnection();
@@ -183,8 +230,8 @@ async function createPeerConnectionAndOffer() {
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
 
-    // 4. Offer를 시그널링 서버로 전송
-    ws.send(JSON.stringify(offer)); 
+    // 4. Offer를 시그널링 서버로 전송 (명시적으로 type 필드 추가)
+    ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp, type: offer.type })); 
     
     // 5. UI 업데이트
     updateSendFileButtonState(); 
