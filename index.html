@@ -3,12 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>sendfile - P2P 파일 전송</title>
+    <!-- 타이틀에서 'sendfile:' 제거 -->
+    <title>P2P 파일 전송</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
-        <h1>sendfile: P2P 파일 전송</h1>
+        <!-- H1 태그에서도 'sendfile:' 제거 -->
+        <h1>P2P 파일 전송</h1>
 
         <div class="connection-section">
             <button id="connectBtn" class="btn primary">연결 시작</button>
@@ -22,6 +24,7 @@
                 <ul id="sendingFilesList" class="file-list">
                     <!-- 전송 대기 중인 파일들이 여기에 표시됩니다 -->
                 </ul>
+                <!-- 파일 선택 후 '파일 전송' 버튼을 눌러야 큐 처리 시작 -->
                 <button id="sendFileBtn" class="btn" disabled>파일 전송</button>
                 <p id="sendFileStatus" class="status-message">전송할 파일을 선택해 주세요.</p>
             </div>
