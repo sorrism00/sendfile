@@ -6,7 +6,7 @@ body {
     color: #333;
     display: flex;
     justify-content: center;
-    align-items: flex-start; /* 상단 정렬 */
+    align-items: flex-start; 
     min-height: 100vh;
 }
 
@@ -53,10 +53,23 @@ h2 {
     border-radius: 5px;
     background-color: #ffffff;
     text-align: left;
+    display: flex; /* 내부 요소 정렬을 위해 flex 추가 */
+    flex-direction: column; /* 세로 정렬 */
 }
 
+/* file-input과 file-list 간격 조정 */
+.sender-area .file-input {
+    margin-bottom: 10px;
+}
+.sender-area .file-list {
+    flex-grow: 1; /* 남은 공간 차지 */
+    margin-bottom: 10px; /* 버튼과 간격 확보 */
+}
+/* file-list는 receiver-area에서도 사용되므로 공통 스타일 유지 */
+
+
 .btn {
-    background-color: #4CAF50; /* Green */
+    background-color: #4CAF50; 
     color: white;
     padding: 10px 20px;
     border: none;
@@ -65,14 +78,13 @@ h2 {
     font-size: 1em;
     transition: background-color 0.3s ease;
     margin: 5px;
-    white-space: nowrap; /* 버튼 텍스트가 잘리지 않도록 */
+    white-space: nowrap; 
 }
 
 .btn.primary {
-    background-color: #3498db; /* Blue */
+    background-color: #3498db; 
 }
 
-/* 일괄 다운로드 버튼 (초록색) */
 .btn.success {
     background-color: #28a745;
 }
@@ -95,9 +107,9 @@ h2 {
 
 .file-input {
     margin-top: 10px;
-    margin-bottom: 15px;
+    /* margin-bottom: 15px; --> sender-area의 file-input에 개별 지정 */
     display: block;
-    width: calc(100% - 10px); /* 패딩 고려 */
+    width: calc(100% - 10px); 
     padding: 5px;
 }
 
@@ -105,18 +117,18 @@ h2 {
     font-size: 0.95em;
     color: #555;
     margin-top: 10px;
-    min-height: 1.5em; /* 메시지가 없을 때 공간 확보 */
+    min-height: 1.5em; 
 }
 
 .file-list {
     list-style: none;
     padding: 0;
-    margin-top: 15px;
-    max-height: 300px; /* 스크롤 가능하도록 높이 제한 */
+    margin-top: 15px; /* input과의 간격 */
+    max-height: 300px; 
     overflow-y: auto;
-    border-top: 1px solid #eee;
-    padding-top: 10px;
-    margin-bottom: 20px; /* 일괄 다운로드 버튼과의 간격 */
+    border: 1px solid #eee; /* 목록 경계 명확화 */
+    border-radius: 5px;
+    padding: 10px;
 }
 
 .file-list li {
@@ -127,9 +139,12 @@ h2 {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    flex-wrap: wrap; /* 내용이 길어지면 줄바꿈 */
+    flex-wrap: wrap; 
     gap: 10px;
     font-size: 0.9em;
+}
+.file-list li:last-child {
+    margin-bottom: 0; /* 마지막 li의 하단 마진 제거 */
 }
 
 .file-list li span {
@@ -144,10 +159,23 @@ h2 {
 }
 
 .status-badge {
-    background-color: #f0ad4e; /* Light Orange for info/status */
+    background-color: #f0ad4e; 
     color: white;
     padding: 3px 8px;
     border-radius: 4px;
     font-size: 0.8em;
-    margin-left: auto; /* 우측으로 정렬 */
+    margin-left: auto; 
+}
+/* 전송 중인 파일 상태를 나타내는 뱃지 */
+.status-badge.sending {
+    background-color: #007bff; /* 파란색 */
+}
+.status-badge.complete {
+    background-color: #28a745; /* 초록색 */
+}
+.status-badge.error {
+    background-color: #dc3545; /* 빨간색 */
+}
+.status-badge.pending {
+    background-color: #6c757d; /* 회색 */
 }
