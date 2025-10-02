@@ -123,15 +123,17 @@
          * @returns {Promise<object>} - 룸의 현재 시그널링 데이터
          */
         async function getRoomDataFromGasSignaling(roomId) {
-            // appendLog(`Polling room data for room ${roomId}`); // 너무 자주 로그 남는것 방지
+            const url = `${GAS_WEB_APP_URL}?roomId=${roomId}`;
+            // 중요: 이 로그를 통해 클라이언트가 어떤 URL로 요청하는지 확인하세요.
+            appendLog(`Polling room data from URL: ${url}`);
             try {
-                const response = await fetch(`${GAS_WEB_APP_URL}?roomId=${roomId}`);
+                const response = await fetch(url);
                 if (!response.ok) {
                     const errorText = await response.text();
                     throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
                 }
                 const data = await response.json();
-                // appendLog(`Polled room data: ${JSON.stringify(data)}`);
+                // appendLog(`Polled room data: ${JSON.stringify(data)}`); // 너무 자주 로그 남는것 방지
                 return data;
             } catch (error) {
                 appendLog(`Error polling room data from GAS: ${error.message || error}`);
@@ -205,7 +207,7 @@
             try {
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
-                // 수정: offer.toJSON() 대신 { type: offer.type, sdp: offer.sdp } 객체 전송
+                // offer.toJSON() 대신 { type: offer.type, sdp: offer.sdp } 객체 전송
                 await sendDataToGasSignaling(roomId, 'offer', { type: offer.type, sdp: offer.sdp }, { senderId: 'sender-' + Math.random().toString(36).substring(7) });
 
                 transferStatus.textContent = `연결 코드 "${roomId}" 생성 완료. 수신자를 기다리는 중...`;
@@ -373,7 +375,10 @@
                     const chunk = currentFile.slice(offset, offset + CHUNK_SIZE);
                     // DataChannel 버퍼가 가득 찼을 때 대기 (백프레셔 처리)
                     await new Promise(resolve => {
-                        if (dataChannel.bufferedAmount > dataChannel.bufferedAmountLowThreshold + (CHUNK_SIZE * 5)) { // 버퍼가 너무 크면 잠시 대기
+                        // Safari 15+ 등 일부 브라우저에서 bufferedAmountLowThreshold가 일관되지 않을 수 있습니다.
+                        // 고정된 버퍼 크기로 확인하는 방식으로 대체할 수 있습니다.
+                        // 예: dataChannel.bufferedAmount가 CHUNK_SIZE * 10 보다 크면 일시 중지
+                        if (dataChannel.bufferedAmount > CHUNK_SIZE * 10) { 
                             appendLog(`DataChannel buffer full (${dataChannel.bufferedAmount} bytes). Pausing...`);
                             const onBufferAmountLow = () => {
                                 dataChannel.removeEventListener('bufferedamountlow', onBufferAmountLow);
@@ -431,7 +436,7 @@
                                 await peerConnection.setRemoteDescription(new RTCSessionDescription(roomData.offer));
                                 const answer = await peerConnection.createAnswer();
                                 await peerConnection.setLocalDescription(answer);
-                                // 수정: answer.toJSON() 대신 { type: answer.type, sdp: answer.sdp } 객체 전송
+                                // answer.toJSON() 대신 { type: answer.type, sdp: answer.sdp } 객체 전송
                                 await sendDataToGasSignaling(roomId, 'answer', { type: answer.type, sdp: answer.sdp }, { receiverId: 'receiver-' + Math.random().toString(36).substring(7) });
                                 appendLog('Sent Answer (Receiver).');
                             }
@@ -487,6 +492,3 @@
 </body>
 
 </html>
-
-
-
