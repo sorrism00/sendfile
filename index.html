@@ -19,22 +19,28 @@
 
         <div class="file-transfer-section">
             <div class="sender-area">
-                <h2>파일 보내기</h2>
-                <input type="file" id="fileInput" class="file-input" multiple>
+                <div class="header-with-button">
+                    <h2>파일 보내기</h2>
+                    <input type="file" id="fileInput" class="file-input-hidden" multiple>
+                    <label for="fileInput" class="btn file-select-label">파일 선택</label>
+                </div>
+                <!-- "선택된 파일 없음" 문구는 삭제됨 -->
                 <ul id="sendingFilesList" class="file-list">
                     <!-- 전송 대기 중인 파일들이 여기에 표시됩니다 -->
                 </ul>
-                <!-- 파일 선택 후 '파일 전송' 버튼을 눌러야 큐 처리 시작 -->
                 <button id="sendFileBtn" class="btn" disabled>파일 전송</button>
                 <p id="sendFileStatus" class="status-message">전송할 파일을 선택해 주세요.</p>
             </div>
 
             <div class="receiver-area">
-                <h2>파일 받기</h2>
-                <p id="receiveStatus" class="status-message">파일 수신 대기 중...</p>
+                <div class="header-with-button">
+                    <h2>파일 받기</h2>
+                    <!-- '파일 수신 대기 중...' 문구 삭제 (p#receiveStatus가 동적 업데이트) -->
+                </div>
                 <ul id="receivedFilesList" class="file-list">
                     <!-- 수신된 파일이 여기에 파일별로 추가됩니다 -->
                 </ul>
+                <p id="receiveStatus" class="status-message"></p> <!-- 상태 메시지를 목록 아래로 이동 -->
                 <button id="downloadAllBtn" class="btn success" disabled>일괄 다운로드 (.zip)</button>
             </div>
         </div>
