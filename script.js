@@ -30,7 +30,6 @@ const downloadAllBtn = document.getElementById('downloadAllBtn');
 let ws; 
 let peerConnection; 
 
-// 각 피어는 상대방에게 보내기 위한 DataChannel과 상대방이 보낸 DataChannel을 받기 위한 채널을 갖습니다.
 let localSendChannel; // 이 브라우저가 생성해서 데이터를 보내는 채널
 let remoteReceiveChannel; // 상대방이 생성해서 이 브라우저로 데이터를 보내는 채널 (수신용)
 
@@ -51,7 +50,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     connectBtn.addEventListener('click', createPeerConnectionAndOffer);
     fileInput.addEventListener('change', handleFileSelection);          
-    sendFileBtn.addEventListener('click', processFileQueue);             
+    sendFileBtn.addEventListener('click', () => { // 버튼 클릭 시 명시적으로 큐 처리 시작
+        if (!currentSendingFile && localSendChannel && localSendChannel.readyState === 'open') {
+            processFileQueue();
+        } else if (currentSendingFile) {
+            console.log('이미 파일 전송 중입니다.');
+        } else if (fileQueue.length === 0) {
+            sendFileStatus.textContent = '전송할 파일을 먼저 선택해주세요.';
+        } else {
+            console.log('DataChannel이 아직 준비되지 않았습니다.');
+        }
+        updateSendFileButtonState();
+    });
     downloadAllBtn.addEventListener('click', downloadAllFilesAsZip);   
 
     updateSendFileButtonState();
@@ -63,12 +73,11 @@ document.addEventListener('DOMContentLoaded', () => {
  * P2P 연결 상태와 파일 큐 상태에 따라 버튼 상태가 변경됩니다.
  */
 function updateSendFileButtonState() {
-    // localSendChannel이 준비되어야 파일 전송 가능
-    const isConnectedAndSendChannelReady = peerConnection && peerConnection.connectionState === 'connected' && 
+    const isConnectedAndSendChannelOpen = peerConnection && peerConnection.connectionState === 'connected' && 
                                             localSendChannel && localSendChannel.readyState === 'open';
     const hasFilesToProcess = currentSendingFile || fileQueue.length > 0;
 
-    sendFileBtn.disabled = !(isConnectedAndSendChannelReady && hasFilesToProcess);
+    sendFileBtn.disabled = !(isConnectedAndSendChannelOpen && hasFilesToProcess);
     
     if (currentSendingFile) {
         sendFileBtn.textContent = `전송 중: ${currentSendingFile.name} (${fileQueue.length}개 남음)`;
@@ -102,10 +111,10 @@ function updateDownloadAllButtonState() {
         }
     }
     downloadAllBtn.disabled = !allFilesComplete;
-    if (!allFilesComplete) {
+    // ZIP 파일 개수에 관계없이 .zip 확장자를 표시 (UX 일관성)
+    downloadAllBtn.textContent = `일괄 다운로드 (${incomingFiles.size}개) (.zip)`; 
+    if (incomingFiles.size === 0) {
         downloadAllBtn.textContent = '일괄 다운로드 (.zip)';
-    } else {
-        downloadAllBtn.textContent = `일괄 다운로드 (${incomingFiles.size}개)`;
     }
 }
 
@@ -228,7 +237,7 @@ function createPeerConnection() {
     }
 
     const iceServers = [{ urls: STUN_SERVER_URL }];
-    // TURN 서버를 사용하지 않습니다. 비용 및 복잡성 문제로 제외.
+    // TURN 서버는 사용하지 않습니다.
 
     const configuration = {
         iceServers: iceServers 
@@ -269,6 +278,7 @@ function createPeerConnection() {
         updateSendFileButtonState(); 
 
         if (peerConnection.connectionState === 'connected') {
+            // P2P 연결 완료 시, 전송 대기 중인 파일이 있다면 전송 시작
             if (fileQueue.length > 0 && !currentSendingFile) {
                 processFileQueue();
             }
@@ -278,12 +288,10 @@ function createPeerConnection() {
         }
     };
 
-    // 상대방이 생성한 DataChannel (즉, 이 브라우저로 전송될 데이터 채널)을 수신
     peerConnection.ondatachannel = event => {
         console.log('상대방으로부터 DataChannel 수신:', event.channel.label);
-        // DataChannel이 'fileTransfer' 레이블을 가졌는지 확인 (송신용 DataChannel 레이블)
         if (event.channel.label === 'fileTransfer') { 
-            remoteReceiveChannel = event.channel; // 상대방의 송신 채널이 내 수신 채널이 됨
+            remoteReceiveChannel = event.channel; 
             setupReceiveChannel(remoteReceiveChannel);
             console.log('상대방의 송신용 DataChannel이 수신 채널로 설정되었습니다.');
         } else {
@@ -291,11 +299,8 @@ function createPeerConnection() {
         }
     };
     
-    // PeerConnection 생성 시 즉시 로컬 송신용 DataChannel도 생성
-    // 이렇게 하면 Offer/Answer 교환 과정에서 상대방에게 이 DataChannel 정보도 함께 전달됩니다.
-    // 이는 'fileTransfer'라는 레이블을 가지며, 상대방은 ondatachannel 이벤트로 이를 수신합니다.
     localSendChannel = peerConnection.createDataChannel('fileTransfer'); 
-    setupSendChannel(localSendChannel); // 이 채널은 내 브라우저가 파일을 보낼 때 사용
+    setupSendChannel(localSendChannel); 
     console.log('로컬 송신용 DataChannel 생성됨:', localSendChannel.label);
 }
 
@@ -320,7 +325,7 @@ async function createPeerConnectionAndOffer() {
         return;
     }
 
-    createPeerConnection(); // PeerConnection 생성 시 localSendChannel도 함께 생성됩니다.
+    createPeerConnection(); 
 
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
@@ -340,11 +345,11 @@ function closePeerConnectionAndClearQueues() {
     }
     peerConnection = null;
 
-    if (localSendChannel) { // localSendChannel 정리
+    if (localSendChannel) { 
         localSendChannel.close();
         localSendChannel = null;
     }
-    if (remoteReceiveChannel) { // remoteReceiveChannel 정리
+    if (remoteReceiveChannel) { 
         remoteReceiveChannel.close();
         remoteReceiveChannel = null;
     }
@@ -377,8 +382,9 @@ function setupSendChannel(channel) {
         console.log('송신 DataChannel 열림!');
         updateSendFileButtonState();
         sendFileStatus.textContent = `파일 전송 준비 완료. ${fileQueue.length}개의 파일 대기 중.`;
+        // localSendChannel이 open되었으므로, 전송 대기 중인 파일이 있다면 전송 시작
         if (fileQueue.length > 0 && !currentSendingFile) {
-            processFileQueue(); 
+            processFileQueue();
         }
     };
     channel.onclose = () => {
@@ -418,7 +424,6 @@ function setupSendChannel(channel) {
  * 파일 전송 큐를 처리하여 다음 파일을 전송합니다.
  */
 function processFileQueue() {
-    // localSendChannel을 사용
     if (!currentSendingFile && fileQueue.length > 0 && localSendChannel && localSendChannel.readyState === 'open') {
         currentSendingFile = fileQueue.shift(); 
         currentSendingFile._offset = 0; 
@@ -442,7 +447,7 @@ function processFileQueue() {
         };
 
         currentFileReader.onload = (e) => {
-            localSendChannel.send(e.target.result); // localSendChannel 사용
+            localSendChannel.send(e.target.result); 
             currentSendingFile._offset += e.target.result.byteLength;
             
             attemptToSendNextChunk(currentSendingFile); 
@@ -462,7 +467,7 @@ function processFileQueue() {
             updateSendFileButtonState();
         };
 
-        localSendChannel.binaryType = 'arraybuffer'; // localSendChannel 사용
+        localSendChannel.binaryType = 'arraybuffer'; 
         attemptToSendNextChunk(currentSendingFile); 
         
     } else if (fileQueue.length === 0 && !currentSendingFile) {
@@ -478,7 +483,7 @@ function processFileQueue() {
  * @param {File} file - 현재 전송할 파일
  */
 function attemptToSendNextChunk(file) {
-    if (!localSendChannel || localSendChannel.readyState !== 'open') { // localSendChannel 사용
+    if (!localSendChannel || localSendChannel.readyState !== 'open') { 
         sendFileStatus.textContent = `P2P 연결이 끊겨 ${file.name} 전송을 중단합니다.`;
         if (file && sendingFileStates.has(file._fileId)) {
             const state = sendingFileStates.get(file._fileId);
@@ -499,11 +504,11 @@ function attemptToSendNextChunk(file) {
             filesize: file.size,
             filetype: file.type
         };
-        localSendChannel.send(JSON.stringify(metadata)); // localSendChannel 사용
+        localSendChannel.send(JSON.stringify(metadata)); 
         console.log('파일 메타데이터 전송:', metadata.filename);
     }
     
-    if (localSendChannel.bufferedAmount > localSendChannel.bufferedAmountLowThreshold) { // localSendChannel 사용
+    if (localSendChannel.bufferedAmount > localSendChannel.bufferedAmountLowThreshold) { 
         console.log('DataChannel 버퍼 가득 참. 전송 일시 중지. bufferedAmount:', localSendChannel.bufferedAmount);
         return; 
     }
@@ -513,7 +518,7 @@ function attemptToSendNextChunk(file) {
         currentFileReader.readAsArrayBuffer(slice); 
     } else {
         sendFileStatus.textContent = `파일 전송 완료: ${file.name}`;
-        localSendChannel.send('EOM:' + file._fileId); // localSendChannel 사용
+        localSendChannel.send('EOM:' + file._fileId); 
         
         // 전송 완료 시 파일 상태 업데이트
         if (file && sendingFileStates.has(file._fileId)) {
@@ -562,6 +567,7 @@ function setupReceiveChannel(channel) {
  * @param {MessageEvent} event - DataChannel로부터 수신된 메시지 이벤트 객체
  */
 async function handleReceiveMessage(event) {
+    // ArrayBuffer는 File 청크 데이터입니다. String은 메타데이터 또는 EOM 신호입니다.
     if (typeof event.data === 'string') {
         if (event.data.startsWith('EOM:')) { 
             const fileId = event.data.substring(4);
@@ -571,6 +577,7 @@ async function handleReceiveMessage(event) {
                 fileData.receiveStatusElem.textContent = `수신 완료`;
                 console.log(`파일 수신 완료: ${fileData.metadata.filename}`);
 
+                // Blob 생성 및 다운로드 버튼 활성화 (Filesystem API 제거됨)
                 const receivedBlob = new Blob(fileData.buffers, { type: fileData.metadata.filetype });
                 
                 if (receivedBlob.size === 0 && fileData.metadata.filesize > 0) {
