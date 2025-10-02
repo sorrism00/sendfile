@@ -30,7 +30,7 @@ let currentSendingFile = null; // 현재 전송 중인 파일 객체
 let currentFileReader = null; // 현재 전송 중인 파일을 읽는 FileReader 객체
 
 // 수신 측에서 여러 파일을 동시에 처리하기 위한 임시 저장 공간 (파일 ID로 관리)
-// {fileId: {metadata, buffers:[], currentSize:0, receiveStatusElem, saveBtn, fileHandle, writableStream, blobUrl}}
+// {fileId: {metadata, buffers:[], currentSize:0, receiveStatusElem, saveBtn, fileHandle, writableStream, blobUrl, pendingWrites:[]}}
 const incomingFiles = new Map(); 
 
 // 현재 처리 중인 수신 파일 ID (Chunk 메시지는 파일 ID를 포함하지 않으므로, 메타데이터 수신 시 업데이트)
@@ -268,9 +268,8 @@ function closePeerConnectionAndClearQueues() {
     currentSendingFile = null; 
     currentFileReader = null; 
 
-    // 수신 측에서 모든 임시 파일 스트림/버퍼 정리
     closeAllFileStreamsAndClearReceiveState(); 
-    receivedFilesList.innerHTML = ''; // 수신 목록 UI 초기화 (전체 삭제)
+    receivedFilesList.innerHTML = ''; 
 
     sendFileStatus.textContent = '전송할 파일을 선택해 주세요.';
     receiveStatus.textContent = '파일 수신 대기 중...';
@@ -290,7 +289,7 @@ function setupSendChannel(channel) {
         updateSendFileButtonState();
         sendFileStatus.textContent = `파일 전송 준비 완료. ${fileQueue.length}개의 파일 대기 중.`;
         if (fileQueue.length > 0 && !currentSendingFile) {
-            processFileQueue(); // DataChannel이 열리면 큐 처리 시작
+            processFileQueue(); 
         }
     };
     channel.onclose = () => {
@@ -326,9 +325,9 @@ function setupSendChannel(channel) {
  */
 function processFileQueue() {
     if (!currentSendingFile && fileQueue.length > 0 && sendChannel && sendChannel.readyState === 'open') {
-        currentSendingFile = fileQueue.shift(); // 큐에서 다음 파일 가져오기
+        currentSendingFile = fileQueue.shift(); 
         currentSendingFile._offset = 0; 
-        currentSendingFile._fileId = Date.now() + '-' + Math.random().toString(36).substring(2, 9); // 파일별 고유 ID 부여
+        currentSendingFile._fileId = Date.now() + '-' + Math.random().toString(36).substring(2, 9); 
 
         sendFileStatus.textContent = `파일 전송 시작: ${currentSendingFile.name} (${(currentSendingFile.size / (1024 * 1024)).toFixed(2)} MB)`;
         
@@ -343,7 +342,7 @@ function processFileQueue() {
             sendChannel.send(e.target.result); 
             currentSendingFile._offset += e.target.result.byteLength;
             
-            attemptToSendNextChunk(currentSendingFile); // 다음 청크 전송 시도
+            attemptToSendNextChunk(currentSendingFile); 
         };
 
         currentFileReader.onerror = (e) => {
@@ -465,6 +464,8 @@ async function handleReceiveMessage(event) {
                         fileData.saveBtn.style.backgroundColor = '#dc3545'; 
                         fileData.saveBtn.disabled = true; 
                     } finally {
+                        // incomingFiles 맵에서 EOM 처리 후 이 파일에 대한 모든 상태 정리
+                        // 이렇게 하면 해당 파일은 Map에서 제거되고, 다음 수신이 currentReceivingFileId를 덮어쓰지 않습니다.
                         incomingFiles.delete(fileId); 
                     }
                 } else { // Blob으로 저장된 경우 (Filesystem Access API 미사용/실패)
@@ -486,16 +487,27 @@ async function handleReceiveMessage(event) {
                         fileData.saveBtn.disabled = false; 
                         console.log(`파일 ${fileData.metadata.filename} Blob URL 생성: ${url}`);
                     }
+                    // EOM 처리 후 이 파일에 대한 모든 상태 정리
                     incomingFiles.delete(fileId); 
                 }
             } else {
-                console.warn(`알 수 없는 파일 ID (${fileId})에 대한 EOM 신호 수신됨.`);
+                console.warn(`알 수 없는 파일 ID (${fileId})에 대한 EOM 신호 수신됨. incomingFiles Map:`, incomingFiles);
+            }
+            // EOM이 처리된 후, currentReceivingFileId는 다음 파일의 메타데이터가 올 때까지 null로 설정.
+            if (currentReceivingFileId === fileId) {
+                currentReceivingFileId = null;
             }
 
         } else { // 파일 메타데이터 수신 (JSON 문자열)
             try {
                 const metadata = JSON.parse(event.data);
                 const fileId = metadata.fileId; // 전송 측에서 보낸 고유 ID 사용
+
+                // 이전 파일 수신 중이었다면 정리 (이전 EOM이 누락되었을 경우 대비)
+                if (currentReceivingFileId && incomingFiles.has(currentReceivingFileId)) {
+                     console.warn(`이전 파일 (${incomingFiles.get(currentReceivingFileId).metadata.filename}) EOM 없이 다음 파일 메타데이터 수신. 이전 파일 정리.`);
+                     await closeSingleFileStreamAndClearReceiveState(currentReceivingFileId);
+                }
 
                 // 새 파일에 대한 임시 저장소 및 UI 생성 (새로운 LI 요소 생성)
                 const li = document.createElement('li');
@@ -578,7 +590,10 @@ async function handleReceiveMessage(event) {
     } else { // 메시지가 ArrayBuffer면 파일 청크 데이터
         // `currentReceivingFileId`를 사용하여 현재 처리할 파일 데이터를 찾음
         if (!currentReceivingFileId || !incomingFiles.has(currentReceivingFileId)) {
-            console.warn('현재 메타데이터가 없는 파일 청크 수신됨, 무시합니다.');
+            // 다른 파일의 청크가 도착한 경우 (이전 파일 EOM 누락 등)
+            // 모든 incomingFiles를 순회하여 가장 가까운 fileId를 찾는 등의 복잡한 로직이 필요할 수 있으나
+            // 단순화를 위해 현재는 경고 후 무시하거나, EOM 누락 시 수동 정리 필요
+            console.warn('현재 메타데이터가 없는 파일 청크 수신됨, 무시합니다. (currentReceivingFileId 불일치)', currentReceivingFileId);
             return;
         }
         
@@ -657,8 +672,9 @@ async function closeSingleFileStreamAndClearReceiveState(fileId) {
         const liElem = document.getElementById(`received-file-${fileId}`);
         if (liElem) liElem.remove();
         incomingFiles.delete(fileId);
-        // NOTE: currentReceivingFileId는 DataChannel 메시지 처리 중 업데이트되므로, 
-        // 여기서 명시적으로 초기화할 필요는 없음. (다음 청크 수신 시 다시 설정될 것)
+        if (currentReceivingFileId === fileId) {
+            currentReceivingFileId = null; 
+        }
     }
 }
 // ===========================================================================
