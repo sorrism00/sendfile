@@ -19,6 +19,9 @@
             <div class="sender-area">
                 <h2>파일 보내기</h2>
                 <input type="file" id="fileInput" class="file-input" multiple>
+                <ul id="sendingFilesList" class="file-list">
+                    <!-- 전송 대기 중인 파일들이 여기에 표시됩니다 -->
+                </ul>
                 <button id="sendFileBtn" class="btn" disabled>파일 전송</button>
                 <p id="sendFileStatus" class="status-message">전송할 파일을 선택해 주세요.</p>
             </div>
@@ -29,14 +32,12 @@
                 <ul id="receivedFilesList" class="file-list">
                     <!-- 수신된 파일이 여기에 파일별로 추가됩니다 -->
                 </ul>
-                <!-- 일괄 다운로드 버튼 추가 -->
                 <button id="downloadAllBtn" class="btn success" disabled>일괄 다운로드 (.zip)</button>
             </div>
         </div>
     </div>
 
     <!-- zip.js 라이브러리 추가 -->
-    <!-- `zip.js`의 worker-proxy는 웹 워커를 사용하여 압축을 비동기적으로 처리합니다. -->
     <script src="https://unpkg.com/@zip.js/zip.js/dist/zip.js"></script>
     <script src="script.js"></script>
 </body>
