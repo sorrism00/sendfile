@@ -534,7 +534,7 @@ function setupReceiveChannel(channel) {
  */
 async function handleReceiveMessage(event) {
     if (typeof event.data === 'string') {
-        if (event.data.startsWith('EOM:'')) { 
+        if (event.data.startsWith('EOM:')) { 
             const fileId = event.data.substring(4);
             const fileData = incomingFiles.get(fileId);
 
