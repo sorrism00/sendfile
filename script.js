@@ -29,11 +29,9 @@ let fileQueue = []; // 전송 대기 중인 파일 큐
 let currentSendingFile = null; // 현재 전송 중인 파일 객체
 let currentFileReader = null; // 현재 전송 중인 파일을 읽는 FileReader 객체
 
-let receivedFileBuffers = []; // 수신된 파일 청크(ArrayBuffer)들을 저장할 배열 (Filesystem Access API 미지원 시)
-let receivedMetadata = null; // 수신된 파일의 메타데이터 (이름, 크기, 타입 등)
-let receivedSize = 0; // 현재까지 수신된 파일 크기 (바이트 단위)
-let fileHandle = null; // FileSystemFileHandle 객체 (Filesystem Access API 사용 시)
-let writableStream = null; // FileSystemWritableFileStream 객체 (Filesystem Access API 사용 시)
+// 수신 측에서 여러 파일을 동시에 처리하기 위한 임시 저장 공간
+const incomingFiles = new Map(); // {fileId: {metadata, buffers, size, fileHandle, writableStream}}
+
 // ===========================================================================
 
 
@@ -42,8 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
     connectWebSocket();
 
     connectBtn.addEventListener('click', createPeerConnectionAndOffer);
-    fileInput.addEventListener('change', handleFileSelection);          // 파일 선택 핸들러
-    sendFileBtn.addEventListener('click', processFileQueue);             // 큐에 있는 파일 전송 시작 버튼
+    fileInput.addEventListener('change', handleFileSelection);          // 파일 선택 핸들러 (multiple)
+    sendFileBtn.addEventListener('click', processFileQueue);             // 큐에 있는 파일 전송 시작/상태 표시 버튼
 
     updateSendFileButtonState();
 });
@@ -61,7 +59,7 @@ function updateSendFileButtonState() {
     
     // 버튼 텍스트 업데이트
     if (currentSendingFile) {
-        sendFileBtn.textContent = `전송 중... (${fileQueue.length}개 남음)`;
+        sendFileBtn.textContent = `전송 중: ${currentSendingFile.name} (${fileQueue.length}개 남음)`;
     } else if (fileQueue.length > 0) {
         sendFileBtn.textContent = `전송 시작 (${fileQueue.length}개 대기)`;
     } else {
@@ -102,7 +100,6 @@ function handleFileSelection() {
  * Railway 시그널링 서버에 WebSocket 연결을 수립합니다.
  */
 function connectWebSocket() {
-    // 이미 연결되어 있거나 연결 중이라면 새로 연결 시도 안함
     if (ws && ws.readyState !== WebSocket.CLOSED) {
         console.warn('WebSocket이 이미 연결되어 있거나 연결 중입니다. 새로 연결을 시도하지 않습니다.');
         return;
@@ -128,7 +125,6 @@ function connectWebSocket() {
             return; 
         }
 
-        // peerConnection이 아직 생성되지 않았거나 닫혔다면 새로 생성
         if (!peerConnection || peerConnection.connectionState === 'closed') { 
             createPeerConnection();
         }
@@ -205,8 +201,15 @@ function createPeerConnection() {
         }
     };
 
+    // NOTE: DataChannel은 한 번의 PeerConnection 내에서 여러 개 생성될 수 있습니다.
+    // 하지만 파일 전송 앱의 단순성을 위해, 'fileTransfer'라는 단일 채널만 사용할 것을 가정합니다.
     peerConnection.ondatachannel = event => {
         console.log('상대방으로부터 DataChannel 수신:', event.label);
+        // 이미 receiveChannel이 있다면 기존 채널을 닫고 새 채널 사용 (간단한 구현을 위해)
+        // 실제로는 채널 이름(event.label)을 통해 여러 채널을 동시에 관리할 수 있습니다.
+        if (receiveChannel && receiveChannel.readyState !== 'closed') {
+            receiveChannel.close();
+        }
         receiveChannel = event.channel;
         setupReceiveChannel(receiveChannel);
     };
@@ -229,7 +232,7 @@ async function createPeerConnectionAndOffer() {
     
     if (ws.readyState !== WebSocket.OPEN) {
         console.log('WebSocket 연결 대기 중... 1초 후 다시 시도합니다.');
-        setTimeout(createPeerConnectionAndOffer, 1000); // 1초 후 다시 시도
+        setTimeout(createPeerConnectionAndOffer, 1000); 
         return;
     }
 
@@ -269,18 +272,19 @@ function closePeerConnectionAndClearQueues() {
     currentSendingFile = null; 
     currentFileReader = null; 
 
-    receivedFileBuffers = [];
-    receivedMetadata = null;
-    receivedSize = 0;
-    if (writableStream) {
-        try { writableStream.close(); } catch (e) { console.error("Error closing writable stream:", e); }
-        writableStream = null;
+    // 수신 측에서 모든 임시 파일 스트림/버퍼 정리
+    for (const [fileId, fileData] of incomingFiles.entries()) {
+        if (fileData.writableStream) {
+            try { fileData.writableStream.close(); } catch (e) { console.error("Error closing stream:", e); }
+        }
+        URL.revokeObjectURL(fileData.blobUrl); // 혹시 Blob URL이 남아있다면 해제
+        incomingFiles.delete(fileId);
     }
-    fileHandle = null;
+    receivedFilesList.innerHTML = ''; // 수신 목록 UI 초기화 (선택 사항, 이전 목록 유지하려면 주석 처리)
 
     sendFileStatus.textContent = '전송할 파일을 선택해 주세요.';
     receiveStatus.textContent = '파일 수신 대기 중...';
-    receivedFilesList.innerHTML = '';
+    updateSendFileButtonState(); // 상태 변경 시 버튼도 업데이트
 }
 // ===========================================================================
 
@@ -303,15 +307,16 @@ function setupSendChannel(channel) {
         console.log('송신 DataChannel 닫힘!');
         updateSendFileButtonState();
         sendFileStatus.textContent = '파일 전송 채널 닫힘.';
-        currentSendingFile = null; // 채널 닫히면 전송 중단
+        currentSendingFile = null; 
         currentFileReader = null;
+        processFileQueue(); // 채널 닫히면 다음 파일 처리 시도 (DataChannel이 새로 생성될 경우 대비)
     };
     channel.onerror = error => {
         console.error('송신 DataChannel 오류:', error);
         sendFileStatus.textContent = `파일 전송 채널 오류: ${error.message}`;
-        currentSendingFile = null; // 오류 발생 시 전송 중단
+        currentSendingFile = null; 
         currentFileReader = null;
-        processFileQueue(); // 다음 파일 전송 시도
+        processFileQueue(); 
         updateSendFileButtonState();
     };
 
@@ -320,7 +325,7 @@ function setupSendChannel(channel) {
         console.log('bufferedAmountLow 이벤트 발생. 데이터 전송 재개 시도. bufferedAmount:', channel.bufferedAmount);
         if (currentSendingFile) {
             attemptToSendNextChunk(currentSendingFile);
-        } else if (fileQueue.length > 0) {
+        } else if (fileQueue.length > 0) { // 현재 전송 중인 파일이 없는데 큐에 있다면 다음 파일 시작
             processFileQueue();
         }
     };
@@ -330,10 +335,12 @@ function setupSendChannel(channel) {
  * 파일 전송 큐를 처리하여 다음 파일을 전송합니다.
  */
 function processFileQueue() {
-    // 현재 전송 중인 파일이 없고, 큐에 파일이 있고, DataChannel이 열려있어야 전송 시작
     if (!currentSendingFile && fileQueue.length > 0 && sendChannel && sendChannel.readyState === 'open') {
         currentSendingFile = fileQueue.shift(); // 큐에서 다음 파일 가져오기
         currentSendingFile._offset = 0; // 파일 객체에 현재 전송 위치 저장 (내부적으로)
+        // 파일별 고유 ID를 부여하여 수신자 측에서 여러 파일을 구분할 수 있도록 합니다.
+        currentSendingFile._fileId = Date.now() + '-' + Math.random().toString(36).substring(2, 9); 
+
         sendFileStatus.textContent = `파일 전송 시작: ${currentSendingFile.name} (${(currentSendingFile.size / (1024 * 1024)).toFixed(2)} MB)`;
         
         currentFileReader = new FileReader(); 
@@ -359,8 +366,7 @@ function processFileQueue() {
             updateSendFileButtonState();
         };
 
-        // 첫 청크 전송 시작
-        attemptToSendNextChunk(currentSendingFile);
+        attemptToSendNextChunk(currentSendingFile); // 첫 청크 전송 시작 (메타데이터 포함)
         
     } else if (fileQueue.length === 0 && !currentSendingFile) {
         sendFileStatus.textContent = '전송할 파일이 없습니다.';
@@ -387,6 +393,7 @@ function attemptToSendNextChunk(file) {
     // 파일 메타데이터 전송 (첫 청크 전송 직전)
     if (file._offset === 0) {
         const metadata = {
+            fileId: file._fileId, // 고유 ID 포함
             filename: file.name,
             filesize: file.size,
             filetype: file.type
@@ -406,7 +413,7 @@ function attemptToSendNextChunk(file) {
         currentFileReader.readAsArrayBuffer(slice); // 다음 청크 읽기 시작 (onload에서 sendChannel.send 호출)
     } else {
         sendFileStatus.textContent = `파일 전송 완료: ${file.name}`;
-        sendChannel.send('EOM'); 
+        sendChannel.send('EOM:' + file._fileId); // EOM 신호에 파일 ID 포함
         
         currentSendingFile = null; 
         currentFileReader = null; 
@@ -431,12 +438,12 @@ function setupReceiveChannel(channel) {
     channel.onclose = () => {
         console.log('수신 DataChannel 닫힘!');
         receiveStatus.textContent = '파일 수신 채널 닫힘.';
-        closeFileStreamsAndClearReceiveState(); 
+        closeAllFileStreamsAndClearReceiveState(); 
     };
     channel.onerror = error => {
         console.error('수신 DataChannel 오류:', error);
         receiveStatus.textContent = `파일 수신 채널 오류: ${error.message}`;
-        closeFileStreamsAndClearReceiveState(); 
+        closeAllFileStreamsAndClearReceiveState(); 
     };
 
     channel.onmessage = handleReceiveMessage; 
@@ -449,124 +456,178 @@ function setupReceiveChannel(channel) {
  */
 async function handleReceiveMessage(event) {
     if (typeof event.data === 'string') {
-        if (event.data === 'EOM') { 
-            if (receivedMetadata) { 
-                if (writableStream) { 
+        // EOM 신호 처리 (파일 ID 포함)
+        if (event.data.startsWith('EOM:')) {
+            const fileId = event.data.substring(4);
+            const fileData = incomingFiles.get(fileId);
+
+            if (fileData && fileData.metadata) {
+                fileData.receiveStatusElem.textContent = `파일 수신 완료: ${fileData.metadata.filename}`;
+                console.log(`파일 수신 완료: ${fileData.metadata.filename}`);
+
+                if (fileData.writableStream) { // FileSystem Access API 사용 중이었다면
                     try {
-                        await writableStream.close(); 
-                        const li = document.createElement('li');
-                        li.innerHTML = `
-                            <span>${receivedMetadata.filename} (${(receivedSize / (1024 * 1024)).toFixed(2)} MB)</span>
-                            <span class="status-badge">디스크 저장 완료</span>
-                        `;
-                        receivedFilesList.appendChild(li);
-                        receiveStatus.textContent = `파일 수신 완료 및 디스크 저장: ${receivedMetadata.filename}`;
-                        console.log('파일 수신 완료 및 스트림 종료.');
+                        await fileData.writableStream.close();
+                        console.log(`스트림 종료: ${fileData.metadata.filename}`);
+                        fileData.saveBtn.textContent = '저장됨';
+                        fileData.saveBtn.disabled = true;
                     } catch (e) {
                         console.error('파일 스트림 닫기 오류:', e);
-                        receiveStatus.textContent = `수신 오류 (스트림 닫기 실패): ${e.message}`;
-                    } finally {
-                        closeFileStreamsAndClearReceiveState();
+                        fileData.receiveStatusElem.textContent = `수신 오류 (스트림 닫기 실패): ${e.message}`;
                     }
-                } else if (receivedFileBuffers.length > 0) { 
-                    const receivedBlob = new Blob(receivedFileBuffers, { type: receivedMetadata.filetype });
+                } else { // Blob으로 저장된 경우
+                    const receivedBlob = new Blob(fileData.buffers, { type: fileData.metadata.filetype });
                     const url = URL.createObjectURL(receivedBlob);
-                    
-                    const li = document.createElement('li');
-                    li.innerHTML = `
-                        <span>${receivedMetadata.filename} (${(receivedSize / (1024 * 1024)).toFixed(2)} MB)</span>
-                        <a href="${url}" download="${receivedMetadata.filename}" class="btn">다운로드</a>
-                    `;
-                    receivedFilesList.appendChild(li);
-
-                    receiveStatus.textContent = `파일 수신 완료 (메모리): ${receivedMetadata.filename}`;
-                    closeFileStreamsAndClearReceiveState();
-                    console.log('파일 수신 완료 및 초기화 (Blob).');
+                    fileData.blobUrl = url; // 나중에 해제를 위해 URL 저장
+                    fileData.saveBtn.href = url;
+                    fileData.saveBtn.setAttribute('download', fileData.metadata.filename);
+                    fileData.saveBtn.textContent = '다운로드';
+                    fileData.saveBtn.disabled = false;
                 }
+                // 이 파일에 대한 임시 데이터 정리
+                incomingFiles.delete(fileId); 
             } else {
-                console.warn('EOM 신호가 메타데이터 없이 수신됨, 무시합니다.');
+                console.warn(`알 수 없는 파일 ID (${fileId})에 대한 EOM 신호 수신됨.`);
             }
         } else { // 파일 메타데이터 수신 (JSON 문자열)
             try {
-                receivedMetadata = JSON.parse(event.data);
-                receivedFileBuffers = []; 
-                receivedSize = 0;
-                receivedFilesList.innerHTML = ''; // 새 파일 받기 시작하면 기존 목록 초기화
+                const metadata = JSON.parse(event.data);
+                const fileId = metadata.fileId;
+
+                // 새 파일에 대한 임시 저장소 및 UI 생성
+                const li = document.createElement('li');
+                li.id = `received-file-${fileId}`; // 파일별 고유 ID
+                li.innerHTML = `
+                    <span>${metadata.filename} (${(metadata.filesize / (1024 * 1024)).toFixed(2)} MB)</span>
+                    <span id="receive-status-${fileId}">수신 시작 (0%)</span>
+                    <a href="#" id="save-btn-${fileId}" class="btn" style="background-color:#5bc0de;" disabled>준비 중</a>
+                `;
+                receivedFilesList.appendChild(li);
+
+                const receiveStatusElem = li.querySelector(`#receive-status-${fileId}`);
+                const saveBtn = li.querySelector(`#save-btn-${fileId}`);
+
+                const fileData = {
+                    metadata,
+                    buffers: [], // Filesystem Access API 미지원 시 사용
+                    currentSize: 0,
+                    receiveStatusElem,
+                    saveBtn,
+                    fileHandle: null,
+                    writableStream: null,
+                    blobUrl: null // Blob URL 생성 시 저장
+                };
+                incomingFiles.set(fileId, fileData);
+
+                receiveStatusElem.textContent = `수신 시작: ${metadata.filename} (0%)`;
+                console.log('파일 메타데이터 수신:', metadata.filename);
 
                 // FileSystem Access API 지원 여부 확인 및 사용 시도 (대용량 파일에 효과적)
                 if ('showSaveFilePicker' in window && 'FileSystemWritableFileStream' in window) {
-                    try {
-                        fileHandle = await window.showSaveFilePicker({
-                            suggestedName: receivedMetadata.filename,
-                            types: [{
-                                description: 'File to save',
-                                accept: { [receivedMetadata.filetype]: ['.' + (receivedMetadata.filename.split('.').pop() || 'dat')] }
-                            }]
-                        });
-                        writableStream = await fileHandle.createWritable();
-                        receiveStatus.textContent = `파일 수신 시작 (디스크 스트림): ${receivedMetadata.filename} (0%)`;
-                        console.log('FilesystemWritableFileStream 생성됨.');
-                    } catch (err) {
-                        console.warn('Filesystem Access API 사용 거부 또는 오류:', err);
-                        fileHandle = null;
-                        writableStream = null;
-                        receiveStatus.textContent = `파일 수신 시작 (메모리): ${receivedMetadata.filename} (0%)`;
-                    }
+                     // saveBtn에 클릭 이벤트 리스너를 붙여 사용자 제스처 시 호출되도록 합니다.
+                    saveBtn.textContent = '디스크 저장';
+                    saveBtn.disabled = false; // 사용자 클릭 대기 상태
+                    saveBtn.onclick = async (e) => {
+                        e.preventDefault(); // 기본 링크 동작 방지
+                        try {
+                            fileData.fileHandle = await window.showSaveFilePicker({
+                                suggestedName: metadata.filename,
+                                types: [{
+                                    description: 'File to save',
+                                    accept: { [metadata.filetype]: ['.' + (metadata.filename.split('.').pop() || 'dat')] }
+                                }]
+                            });
+                            fileData.writableStream = await fileData.fileHandle.createWritable();
+                            receiveStatusElem.textContent = `${metadata.filename} (스트림 활성화 중)`;
+                            saveBtn.textContent = '저장 중...';
+                            saveBtn.disabled = true; // 저장 시작 후 비활성화
+                            console.log('FilesystemWritableFileStream 생성됨.');
+
+                            // 이전에 버퍼링된 데이터가 있다면 스트림에 쓰기
+                            if (fileData.buffers.length > 0) {
+                                console.log('버퍼링된 데이터 스트림에 쓰기 시작');
+                                for (const buffer of fileData.buffers) {
+                                    await fileData.writableStream.write(buffer);
+                                }
+                                fileData.buffers = []; // 버퍼 비움
+                                console.log('버퍼링된 데이터 스트림에 쓰기 완료');
+                            }
+                        } catch (err) {
+                            console.warn('Filesystem Access API 사용 거부 또는 오류:', err);
+                            fileData.fileHandle = null;
+                            fileData.writableStream = null;
+                            receiveStatusElem.textContent = `${metadata.filename} (메모리 버퍼링)`;
+                            saveBtn.textContent = '다운로드 준비'; // 다운로드 버튼으로 변경
+                            // 이미 버퍼에 쌓인 데이터가 있으므로 Blob 생성 준비
+                        }
+                    };
+
                 } else {
                     console.log('Filesystem Access API 미지원 또는 제한됨. 메모리 방식으로 수신.');
-                    receiveStatus.textContent = `파일 수신 시작 (메모리): ${receivedMetadata.filename} (0%)`;
+                    receiveStatusElem.textContent = `${metadata.filename} (메모리 버퍼링)`;
+                    saveBtn.textContent = '다운로드 준비';
+                    // 이 시점에서는 버튼을 즉시 활성화하지 않고 EOM 받은 후에 Blob URL 생성 후 활성화
                 }
-
-                console.log('파일 메타데이터 수신:', receivedMetadata);
-
             } catch (e) {
                 console.error('수신된 메타데이터 파싱 오류:', event.data, e);
                 receiveStatus.textContent = '메타데이터 수신 오류.';
             }
         }
     } else { // 메시지가 ArrayBuffer면 파일 청크 데이터
-        if (receivedMetadata) { 
-            receivedSize += event.data.byteLength;
-            const percent = Math.floor((receivedSize / receivedMetadata.filesize) * 100);
-            receiveStatus.textContent = `파일 수신 중: ${receivedMetadata.filename} (${percent}%)`;
+        // 전송 중인 파일의 ID가 없거나 메타데이터가 없는 경우 무시
+        if (!event.data || !receivedMetadata || !incomingFiles.has(receivedMetadata.fileId)) {
+            console.warn('메타데이터/파일 ID 없이 청크 수신됨, 무시합니다.', receivedMetadata);
+            return;
+        }
 
-            if (writableStream) { 
-                try {
-                    await writableStream.write(event.data);
-                } catch (err) {
-                    console.error('파일 스트림 쓰기 오류:', err);
-                    try { await writableStream.close(); } catch (closeErr) { console.error("Error closing stream after write error:", closeErr); }
-                    writableStream = null;
-                    fileHandle = null;
-                    receiveStatus.textContent = '파일 쓰기 중 오류 발생. 남은 데이터를 메모리로 수신합니다.';
-                    receivedFileBuffers.push(event.data); 
-                }
-            } else { 
-                receivedFileBuffers.push(event.data);
+        const fileData = incomingFiles.get(receivedMetadata.fileId);
+        fileData.currentSize += event.data.byteLength;
+        const percent = Math.floor((fileData.currentSize / fileData.metadata.filesize) * 100);
+        fileData.receiveStatusElem.textContent = `${fileData.metadata.filename} (${percent}%)`;
+
+        if (fileData.writableStream) { // 파일 스트림이 있으면 바로 디스크에 쓰기
+            try {
+                await fileData.writableStream.write(event.data);
+            } catch (err) {
+                console.error('파일 스트림 쓰기 오류:', err);
+                try { await fileData.writableStream.close(); } catch (closeErr) { console.error("Error closing stream after write error:", closeErr); }
+                fileData.writableStream = null;
+                fileData.fileHandle = null;
+                fileData.receiveStatusElem.textContent = '파일 쓰기 중 오류 발생. 남은 데이터를 메모리로 수신합니다.';
+                fileData.buffers.push(event.data); // 남은 데이터는 메모리에 임시 저장 시도
+                fileData.saveBtn.textContent = '다운로드 준비';
+                fileData.saveBtn.disabled = false;
             }
-        } else {
-            console.warn('메타데이터 없이 파일 청크 수신됨, 무시합니다.');
+        } else { // 파일 스트림이 없으면 메모리에 버퍼링
+            fileData.buffers.push(event.data);
+            // 만약 스트리밍 전환 가능하면 시도
+            if (fileData.saveBtn.onclick && !fileData.writableStream && fileData.buffers.length > 0 && fileData.saveBtn.disabled === false) {
+                 // 이 시점에서 스트림 버튼이 활성화되어 있고 사용자가 클릭하지 않았다면
+                 // 이미 메모리에 데이터가 쌓이고 있으므로 이제 Blob 방식으로 처리한다고 가정하고, 
+                 // 나중에 EOM 받았을 때 다운로드 버튼 활성화
+            }
         }
     }
 }
 
 /**
- * 수신 관련 스트림 및 버퍼를 초기화하고 닫습니다.
+ * 수신 관련 스트림 및 버퍼를 초기화하고 닫습니다. (전체 incomingFiles 정리)
  */
-async function closeFileStreamsAndClearReceiveState() {
-    receivedFileBuffers = [];
-    receivedMetadata = null;
-    receivedSize = 0;
-    if (writableStream) {
-        try {
-            await writableStream.close(); 
-            console.log("Writable stream closed.");
-        } catch (e) {
-            console.error("Error closing writable stream:", e);
+async function closeAllFileStreamsAndClearReceiveState() {
+    for (const [fileId, fileData] of incomingFiles.entries()) {
+        if (fileData.writableStream) {
+            try { await fileData.writableStream.close(); } catch (e) { console.error("Error closing writable stream on clear:", e); }
         }
-        writableStream = null;
+        if (fileData.blobUrl) {
+            URL.revokeObjectURL(fileData.blobUrl);
+        }
+        // UI에서 해당 파일 항목 제거 (선택 사항)
+        const liElem = document.getElementById(`received-file-${fileId}`);
+        if (liElem) liElem.remove();
     }
-    fileHandle = null;
+    incomingFiles.clear(); // 맵 초기화
+
     receiveStatus.textContent = '파일 수신 대기 중...';
+    // receivedFilesList.innerHTML = ''; // 필요한 경우 목록 초기화 (현재는 파일별로 정리되므로 불필요)
 }
 // ===========================================================================
