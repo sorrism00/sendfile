@@ -279,7 +279,6 @@ function createPeerConnection() {
         if (peerConnection.connectionState === 'connected') {
             // P2P 연결 완료 시, 전송 대기 중인 파일이 있다면 (그리고 현재 전송 중인 파일이 없다면)
             // '파일 전송' 버튼을 눌러야 시작하므로 여기서는 바로 호출하지 않음
-            // processFileQueue()는 버튼 클릭으로 시작하도록.
         } else if (peerConnection.connectionState === 'failed') {
              console.error('WebRTC 연결이 최종적으로 실패했습니다!');
              connectionStatus.textContent = '연결 실패: 네트워크 문제 (TURN 필요?)';
@@ -380,8 +379,7 @@ function setupSendChannel(channel) {
         console.log('송신 DataChannel 열림!');
         updateSendFileButtonState();
         sendFileStatus.textContent = `파일 전송 준비 완료. ${fileQueue.length}개의 파일 대기 중.`;
-        // DataChannel이 open되었으므로, 전송 버튼 활성화 (버튼 클릭 대기)
-        // processFileQueue()는 sendFileBtn 클릭 시 호출되도록 함
+        // DataChannel이 open되었으므로, '파일 전송' 버튼이 활성화되어 클릭을 대기함
     };
     channel.onclose = () => {
         console.log('송신 DataChannel 닫힘!');
@@ -411,7 +409,7 @@ function setupSendChannel(channel) {
         if (currentSendingFile) {
             attemptToSendNextChunk(currentSendingFile);
         } else if (fileQueue.length > 0) { 
-            processFileQueue();
+            processFileQueue(); // 큐에 파일이 있다면 다음 파일 전송 시작
         }
     };
 }
@@ -420,6 +418,7 @@ function setupSendChannel(channel) {
  * 파일 전송 큐를 처리하여 다음 파일을 전송합니다.
  */
 function processFileQueue() {
+    // localSendChannel이 open 상태이고, 큐에 파일이 있으며, 현재 전송 중인 파일이 없어야 시작
     if (!currentSendingFile && fileQueue.length > 0 && localSendChannel && localSendChannel.readyState === 'open') {
         currentSendingFile = fileQueue.shift(); 
         currentSendingFile._offset = 0; 
