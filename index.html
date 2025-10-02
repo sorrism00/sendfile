@@ -18,9 +18,10 @@
         <div class="file-transfer-section">
             <div class="sender-area">
                 <h2>파일 보내기</h2>
-                <input type="file" id="fileInput" class="file-input">
+                <input type="file" id="fileInput" class="file-input" multiple>
+                <!-- 파일 선택 버튼을 누르면 파일이 큐에 들어가고, "파일 전송" 버튼은 큐 처리 시작/상태 표시용으로 변경됨 -->
                 <button id="sendFileBtn" class="btn" disabled>파일 전송</button>
-                <p id="sendFileStatus" class="status-message"></p>
+                <p id="sendFileStatus" class="status-message">전송할 파일을 선택해 주세요.</p>
             </div>
 
             <div class="receiver-area">
