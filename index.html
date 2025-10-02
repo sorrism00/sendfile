@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- 타이틀에서 'sendfile:' 제거 -->
     <title>P2P 파일 전송</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
-        <!-- H1 태그에서도 'sendfile:' 제거 -->
-        <h1>P2P 파일 전송</h1>
-
-        <div class="connection-section">
-            <button id="connectBtn" class="btn primary">연결 시작</button>
-            <p id="connectionStatus" class="status-message">연결 상태: 대기 중</p>
+        <!-- 상단 헤더와 연결 시작 버튼 영역 통합 -->
+        <div class="main-header">
+            <h1>P2P 파일 전송</h1>
+            <div class="connection-control">
+                <button id="connectBtn" class="btn primary">연결 시작</button>
+                <p id="connectionStatus" class="status-message">연결 상태: 대기 중</p>
+            </div>
         </div>
 
         <div class="file-transfer-section">
             <div class="sender-area">
-                <div class="header-with-button">
+                <div class="area-header">
                     <h2>파일 보내기</h2>
                     <input type="file" id="fileInput" class="file-input-hidden" multiple>
                     <label for="fileInput" class="btn file-select-label">파일 선택</label>
@@ -28,24 +28,22 @@
                     <!-- 전송 대기 중인 파일들이 여기에 표시됩니다 -->
                 </ul>
                 <button id="sendFileBtn" class="btn" disabled>파일 전송</button>
-                <p id="sendFileStatus" class="status-message">전송할 파일을 선택해 주세요.</p>
+                <p id="sendFileStatus" class="status-message"></p>
             </div>
 
             <div class="receiver-area">
-                <div class="header-with-button">
+                <div class="area-header">
                     <h2>파일 받기</h2>
                 </div>
                 <ul id="receivedFilesList" class="file-list">
                     <!-- 수신된 파일이 여기에 파일별로 추가됩니다 -->
                 </ul>
                 <button id="downloadAllBtn" class="btn success" disabled>일괄 다운로드 (.zip)</button>
-                <!-- '파일 수신 대기 중...' 문구는 downloadAllBtn 아래로 이동 -->
-                <p id="receiveStatus" class="status-message">파일 수신 대기 중...</p>
+                <p id="receiveStatus" class="status-message"></p>
             </div>
         </div>
     </div>
 
-    <!-- zip.js 라이브러리 추가 -->
     <script src="https://unpkg.com/@zip.js/zip.js/dist/zip.js"></script>
     <script src="script.js"></script>
 </body>
