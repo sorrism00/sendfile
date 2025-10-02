@@ -18,6 +18,7 @@
         <div class="file-transfer-section">
             <div class="sender-area">
                 <h2>파일 보내기</h2>
+                <!-- multiple 속성 추가로 여러 파일 선택 가능 -->
                 <input type="file" id="fileInput" class="file-input" multiple>
                 <!-- 파일 선택 버튼을 누르면 파일이 큐에 들어가고, "파일 전송" 버튼은 큐 처리 시작/상태 표시용으로 변경됨 -->
                 <button id="sendFileBtn" class="btn" disabled>파일 전송</button>
@@ -28,7 +29,7 @@
                 <h2>파일 받기</h2>
                 <p id="receiveStatus" class="status-message">파일 수신 대기 중...</p>
                 <ul id="receivedFilesList" class="file-list">
-                    <!-- 수신된 파일이 여기에 추가됩니다 -->
+                    <!-- 수신된 파일이 여기에 파일별로 추가됩니다 -->
                 </ul>
             </div>
         </div>
