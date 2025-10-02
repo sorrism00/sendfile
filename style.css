@@ -72,6 +72,14 @@ h2 {
     background-color: #3498db; /* Blue */
 }
 
+/* 일괄 다운로드 버튼 (초록색) */
+.btn.success {
+    background-color: #28a745;
+}
+.btn.success:hover:not(:disabled) {
+    background-color: #218838;
+}
+
 .btn:hover:not(:disabled) {
     background-color: #45a049;
 }
@@ -108,6 +116,7 @@ h2 {
     overflow-y: auto;
     border-top: 1px solid #eee;
     padding-top: 10px;
+    margin-bottom: 20px; /* 일괄 다운로드 버튼과의 간격 */
 }
 
 .file-list li {
@@ -124,8 +133,8 @@ h2 {
 }
 
 .file-list li span {
-    flex-shrink: 0; /* 글자 길어도 축소되지 않도록 */
-    word-break: break-all; /* 긴 파일 이름 줄바꿈 */
+    flex-shrink: 0; 
+    word-break: break-all; 
 }
 
 .file-list li a.btn {
