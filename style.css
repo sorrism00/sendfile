@@ -3,7 +3,8 @@ html, body {
     padding: 0;
     width: 100%;
     height: 100%;
-    overflow: hidden; /* 스크롤바 제거 */
+    /* overflow: hidden; /* 스크롤바 제거, 필요시 body에도 overflow-y: auto */
+    box-sizing: border-box; /* padding/border가 width/height에 포함되도록 */
 }
 
 body {
@@ -12,8 +13,7 @@ body {
     color: #333;
     display: flex;
     justify-content: center;
-    align-items: center; /* 전체 콘텐츠를 수직 중앙 정렬 */
-    /* min-height: 100vh; <-- 이제 height: 100% 사용 */
+    align-items: center; /* 전체 콘텐츠를 수직/수평 중앙 정렬 */
 }
 
 .container {
@@ -21,65 +21,118 @@ body {
     padding: 30px;
     border-radius: 10px;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-    max-width: 90%; /* 화면의 90% 정도 사용하도록 조정 (너무 꽉차면 답답할 수 있으니) */
-    width: 100%;
-    max-height: 95%; /* 높이도 조정 */
+    width: 90vw; /* 뷰포트 너비의 90% 사용 */
+    height: 90vh; /* 뷰포트 높이의 90% 사용 */
     overflow-y: auto; /* 내용이 넘칠 경우 스크롤 허용 */
-    box-sizing: border-box; /* padding이 width/height에 포함되도록 */
-    display: flex; /* 내부 요소들을 flex로 정렬 */
+    box-sizing: border-box; 
+    display: flex; 
     flex-direction: column; /* 세로 방향으로 */
     align-items: center; /* 수평 중앙 정렬 */
 }
 
 h1 {
     color: #2c3e50;
-    margin-bottom: 30px;
+    margin-bottom: 20px; /* H1 아래 간격 */
     font-size: 2.2em;
+    width: 100%; /* 너비 꽉 채움 */
+    text-align: center; /* 텍스트 중앙 정렬 */
 }
 
-h2 {
-    color: #34495e;
-    margin-top: 25px;
-    margin-bottom: 15px;
-    font-size: 1.6em;
-}
-
-.connection-section, .file-transfer-section {
+/* 연결 섹션 버튼과 상태 메시지 정렬 */
+.connection-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
     margin-bottom: 30px;
     padding: 20px;
     border: 1px solid #eee;
     border-radius: 8px;
     background-color: #fafafa;
-    width: 100%; /* container 내부에서 너비 꽉 채우기 */
     box-sizing: border-box;
+}
+.connection-section .btn.primary {
+    margin-bottom: 10px; /* 버튼 아래 상태 메시지와의 간격 */
+}
+
+h2 {
+    color: #34495e;
+    font-size: 1.6em;
+    margin: 0; /* 기본 마진 제거 */
 }
 
 .file-transfer-section {
     display: flex;
     flex-wrap: wrap; /* 작은 화면에서 줄바꿈 */
     gap: 20px;
-    justify-content: center; /* 항목 중앙 정렬 */
+    justify-content: center; 
+    width: 100%;
+    flex-grow: 1; /* 남은 공간을 차지하도록 */
 }
 
 .sender-area, .receiver-area {
     flex: 1; /* 가변 폭 */
-    min-width: 300px; /* 최소 너비 지정 (모바일 호환성) */
+    min-width: 300px; /* 최소 너비 지정 */
+    max-width: 100%; /* 넘치지 않도록 */
     padding: 15px;
     border: 1px solid #e0e0e0;
     border-radius: 5px;
     background-color: #ffffff;
-    text-align: left;
     display: flex; 
-    flex-direction: column; 
+    flex-direction: column; /* 세로 정렬 */
     box-sizing: border-box;
 }
 
-.sender-area .file-input {
-    margin-bottom: 10px;
+/* 헤더와 버튼 정렬 */
+.header-with-button {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px; /* 헤더 아래 간격 */
+    width: 100%;
 }
-.sender-area .file-list {
-    flex-grow: 1; 
-    margin-bottom: 10px; 
+
+/* 파일 선택 input 숨기기 및 label을 버튼처럼 사용 */
+.file-input-hidden {
+    display: none;
+}
+.file-select-label {
+    background-color: #007bff; /* 파란색 계열 */
+    color: white;
+    padding: 8px 15px; /* 조금 작은 패딩 */
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9em; /* 폰트 크기 조정 */
+    transition: background-color 0.3s ease;
+    margin-left: 10px; /* 헤더 텍스트와 간격 */
+}
+.file-select-label:hover {
+    background-color: #0056b3;
+}
+
+
+.file-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 15px 0; /* 상하 마진 조정, 하단 마진은 버튼과의 간격 */
+    flex-grow: 1; /* 남은 세로 공간을 채우도록 */
+    max-height: 250px; /* 리스트 최대 높이 지정 (컨테이너 높이 대비) */
+    overflow-y: auto;
+    border: 1px solid #eee; 
+    border-radius: 5px;
+    padding: 10px;
+}
+
+/* 파일 목록 아래 버튼/상태 메시지 정렬 */
+.sender-area .btn, .sender-area .status-message,
+.receiver-area .btn, .receiver-area .status-message {
+    width: auto; /* 버튼이 꽉 차는 것을 방지 */
+    align-self: center; /* 가운데 정렬 */
+    margin-top: 10px; /* 위쪽 요소와 간격 */
+    margin-bottom: 5px;
+}
+.receiver-area .status-message { /* 수신 상태 메시지 */
+    text-align: center;
 }
 
 
@@ -92,7 +145,7 @@ h2 {
     cursor: pointer;
     font-size: 1em;
     transition: background-color 0.3s ease;
-    margin: 5px;
+    /* margin: 5px; <-- sender/receiver-area 내부에서 개별적으로 조정 */
     white-space: nowrap; 
 }
 
@@ -120,29 +173,16 @@ h2 {
     cursor: not-allowed;
 }
 
-.file-input {
-    margin-top: 10px;
-    display: block;
-    width: calc(100% - 10px); 
-    padding: 5px;
+.file-input { /* 기존 file-input 스타일은 file-input-hidden으로 대체 */
+    display: none;
 }
+
 
 .status-message {
     font-size: 0.95em;
     color: #555;
-    margin-top: 10px;
+    /* margin-top: 10px; <-- sender/receiver-area 내부에서 개별적으로 조정 */
     min-height: 1.5em; 
-}
-
-.file-list {
-    list-style: none;
-    padding: 0;
-    margin-top: 15px; 
-    max-height: 300px; 
-    overflow-y: auto;
-    border: 1px solid #eee; 
-    border-radius: 5px;
-    padding: 10px;
 }
 
 .file-list li {
