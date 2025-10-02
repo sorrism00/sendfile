@@ -19,7 +19,7 @@
     <div id="controls">
         <div>
             <label for="roomIdInput">연결 코드 (Room ID):</label>
-            <input type="text" id="roomIdInput" placeholder="Room ID 입력 또는 자동 생성" value="testroom123">
+            <input type="text" id="roomIdInput" placeholder="Room ID 입력 또는 자동 생성" value="test">
             <button id="createRoomBtn">새 연결 코드 생성</button>
         </div>
 
@@ -123,7 +123,7 @@
          * @returns {Promise<object>} - 룸의 현재 시그널링 데이터
          */
         async function getRoomDataFromGasSignaling(roomId) {
-            const url = `${GAS_WEB_APP_URL}?roomId=test`;
+            const url = `${GAS_WEB_APP_URL}?roomId=${roomId}`;
             // 중요: 이 로그를 통해 클라이언트가 어떤 URL로 요청하는지 확인하세요.
             appendLog(`Polling room data from URL: ${url}`);
             try {
@@ -492,5 +492,6 @@
 </body>
 
 </html>
+
 
 
